@@ -78,7 +78,8 @@ def verifier(keys):
 def make_token(signing_key):
     def make(sub="alice", key=None, headers=None, **claims):
         now = int(time.time())
-        payload = {"iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300, "sub": sub}
+        # ai_planning: the default user may use AI planning (spec 009); pass None to drop it.
+        payload = {"iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300, "sub": sub, "ai_planning": True}
         payload.update(claims)
         payload = {k: v for k, v in payload.items() if v is not None}  # None removes a claim
         hdrs = {"kid": KID, **(headers or {})}

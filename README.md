@@ -22,6 +22,16 @@ Added responses, all `{"detail": "<message>"}`:
 
 See `specs/008-oidc-auth/contracts/` for the details.
 
+**Access to AI planning (spec 009).** A stand-in check until the business supplies real rules: the token's boolean
+`ai_planning` claim decides, `ENTITLEMENT_DENY` (user ids or usernames) always refuses, and a missing claim fails
+closed to education only (`ENTITLEMENT_MODE=unavailable` forces that for everyone). A refused chat returns
+`403 "AI planning is not available for this account"` and stores nothing. See `specs/009-sign-in-session-access/`.
+
+`GET /api/me`: who is signed in and what they may use.
+```json
+{ "user_id": "token sub", "name": "token name, else preferred_username, else sub", "access": "granted | denied | unavailable" }
+```
+
 `POST /api/chat`
 ```json
 // request
@@ -29,6 +39,7 @@ See `specs/008-oidc-auth/contracts/` for the details.
 // response
 { "session_id": "string", "reply": "string", "intent": "string | null", "message_id": "integer | null" }
 ```
+In education-only mode the response also has `"education_only": true`; otherwise the field is left out.
 `message_id` is the id of the assistant message created for this reply, and it is the id to rate with the feedback
 endpoint below. It is always an integer today. Clients that don't use it can ignore it.
 
@@ -66,8 +77,8 @@ The frontend sends the session IDs this browser has used. Unknown IDs, and IDs o
 
 `GET /api/health` → `{ "status": "ok" }`
 
-The backend calls the agent with `{ "prompt": "<message>", "session_id": "..." }` and expects
-`{ "reply": "...", "intent": "..." }` back. Until AgentCore access is ready, the backend returns a mock reply.
+The backend calls the agent with `{ "prompt": "<message>", "session_id": "..." }` (plus `"education_only": true` in
+education-only mode) and expects `{ "reply": "...", "intent": "..." }` back. Until AgentCore access is ready, the backend returns a mock reply.
 
 ## Run locally
 

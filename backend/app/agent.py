@@ -17,12 +17,18 @@ class AgentReply:
     latency_ms: int
 
 
-def call_agent(url: str, session_id: str, message: str) -> AgentReply:
-    """POST {prompt, session_id} to the agent and parse {reply, intent}. Raises AgentError on any failure."""
+def call_agent(url: str, session_id: str, message: str, education_only: bool = False) -> AgentReply:
+    """POST {prompt, session_id} to the agent and parse {reply, intent}. Raises AgentError on any failure.
+
+    With education_only (spec 009), the body also carries "education_only": true; otherwise it is unchanged.
+    """
+    body = {"prompt": message, "session_id": session_id}
+    if education_only:
+        body["education_only"] = True
     started = time.perf_counter()
     try:
         with httpx.Client(timeout=AGENT_TIMEOUT_SECONDS) as client:
-            r = client.post(url, json={"prompt": message, "session_id": session_id})
+            r = client.post(url, json=body)
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPError as e:  # timeouts, connection errors, non-2xx

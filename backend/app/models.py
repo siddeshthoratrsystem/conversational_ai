@@ -14,6 +14,9 @@ class Session(Base):
     # The token's `sub` for whoever sent the first message; never changed. NULL = nobody owns it
     # (every chat stored before spec 008), so the API treats it as not found for everyone.
     user_id: Mapped[str | None] = mapped_column(Text)
+    # Spec 009: the access result of the latest turn ('granted' | 'unavailable') and when it was decided.
+    access: Mapped[str | None] = mapped_column(Text)
+    access_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

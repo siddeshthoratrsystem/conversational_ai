@@ -1,8 +1,8 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session as DbSession
 
 from app import feedback, models
 from app import auth
-from app.auth import current_user
+from app.auth import current_user, verified_claims
 from app.agent import AgentError, call_agent
+from app.entitlement import check_access
 from app.db import get_db
 
 logging.basicConfig(format="%(levelname)s [%(name)s] %(message)s")  # show the level on app logs
@@ -41,6 +42,9 @@ class ChatResponse(BaseModel):
     # Id of the assistant message created for this reply (the id to rate). Typed nullable because
     # new fields must be nullable or optional (Principle I), but always an integer today.
     message_id: int | None
+    # Spec 009: present (true) only when the access check could not be completed and only
+    # education is offered; left out otherwise, so existing replies are unchanged.
+    education_only: bool | None = None
 
 
 class HistoryMessage(BaseModel):
@@ -71,6 +75,12 @@ class SessionsResponse(BaseModel):
     sessions: list[SessionSummary]
 
 
+class MeResponse(BaseModel):
+    user_id: str
+    name: str
+    access: Literal["granted", "denied", "unavailable"]
+
+
 MAX_SESSION_IDS = 200
 TITLE_MAX_CHARS = 80
 
@@ -80,14 +90,16 @@ def health():
     return {"status": "ok"}
 
 
-def _reply_for(session_id: str, message: str) -> dict:
+def _reply_for(session_id: str, message: str, education_only: bool = False) -> dict:
     """Ask the agent; fall back to the mock reply (and log why) if it is unset or fails."""
     agent_url = os.getenv("AGENT_URL")  # full URL, e.g. http://localhost:8080/invocations
     if not agent_url:
         logger.warning("AGENT_URL is not set; returning mock reply (session_id=%s)", session_id)
     else:
         try:
-            result = call_agent(agent_url, session_id, message)
+            # Pass the flag only when set, so the agent call is unchanged otherwise.
+            extra = {"education_only": True} if education_only else {}
+            result = call_agent(agent_url, session_id, message, **extra)
             return {
                 "reply": result.reply,
                 "intent": result.intent,
@@ -130,19 +142,26 @@ def _check_owner(db: DbSession, session_id: str, user_id: str) -> bool:
     return True
 
 
-def _persist(db: DbSession, session_id: str, user_id: str, message: str, result: dict) -> int:
-    """Store the session (if new) plus the user and assistant messages in one transaction.
+def _persist(
+    db: DbSession, session_id: str, user_id: str, message: str, result: dict, access: str
+) -> int:
+    """Store the session (if new) plus the user and assistant messages in one transaction, and
+    record this turn's access result on the session (spec 009).
 
     A new session is owned by the caller. If another user's session turned up meanwhile, the
     answer is the same 404 and nothing is stored. Returns the id of the assistant message.
     """
     for attempt in (1, 2):
         try:
+            checked_at = datetime.now(timezone.utc)
             if not _check_owner(db, session_id, user_id):
-                db.add(models.Session(id=session_id, user_id=user_id))
+                db.add(models.Session(id=session_id, user_id=user_id, access=access, access_checked_at=checked_at))
                 # No relationship() links the models, so the unit of work won't order the inserts
                 # by FK; flush the session row first (still the same transaction).
                 db.flush()
+            else:
+                session = db.get(models.Session, session_id)
+                session.access, session.access_checked_at = access, checked_at
             db.add(models.Message(session_id=session_id, role="user", content=message))
             assistant = models.Message(
                 session_id=session_id,
@@ -168,9 +187,19 @@ def _persist(db: DbSession, session_id: str, user_id: str, message: str, result:
                 raise
 
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.get("/api/me", response_model=MeResponse)
+def me(claims: dict[str, Any] = Depends(verified_claims)):
+    """Who is signed in and what they may use (spec 009)."""
+    name = claims.get("name") or claims.get("preferred_username") or claims["sub"]
+    return MeResponse(user_id=claims["sub"], name=name, access=check_access(claims))
+
+
+@app.post("/api/chat", response_model=ChatResponse, response_model_exclude_unset=True)
 def chat(
-    req: ChatRequest, user_id: str = Depends(current_user), db: DbSession = Depends(get_db)
+    req: ChatRequest,
+    user_id: str = Depends(current_user),
+    claims: dict[str, Any] = Depends(verified_claims),
+    db: DbSession = Depends(get_db),
 ):
     if not req.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id must not be empty")
@@ -181,15 +210,24 @@ def chat(
     _check_owner(db, req.session_id, user_id)
     db.rollback()  # end the read transaction so no connection is held during the agent call
 
+    # Spec 009: no AI planning without access; education only when access can't be decided.
+    access = check_access(claims)
+    if access == "denied":
+        logger.warning("AI planning refused (403) (user_id=%s, session_id=%s)", user_id, req.session_id)
+        raise HTTPException(status_code=403, detail="AI planning is not available for this account")
+    education_only = access == "unavailable"
+
     # The agent is called before writing so no transaction is held open during the HTTP call;
     # both messages are still written and committed together afterwards.
-    result = _reply_for(req.session_id, req.message)
-    message_id = _persist(db, req.session_id, user_id, req.message, result)
+    result = _reply_for(req.session_id, req.message, education_only)
+    message_id = _persist(db, req.session_id, user_id, req.message, result, access)
+    extra = {"education_only": True} if education_only else {}
     return ChatResponse(
         session_id=req.session_id,
         reply=result["reply"],
         intent=result["intent"],
         message_id=message_id,
+        **extra,
     )
 
 

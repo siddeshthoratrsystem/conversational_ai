@@ -40,6 +40,7 @@ def test_token_for_alice_passes_the_backends_checks(idp):
     assert claims["aud"] == [AUDIENCE]
     assert claims["exp"] - claims["iat"] == 3600
     assert claims["exp"] > time.time()
+    assert claims["ai_planning"] is True
 
 
 def test_username_is_trimmed(idp):

@@ -106,8 +106,8 @@ def _bearer_token(request: Request) -> str:
     return parts[1]
 
 
-def current_user(request: Request, verifier: Verifier = Depends(get_verifier)) -> str:
-    """FastAPI dependency: the verified token's subject, or a 401 / 503. The only source of identity."""
+def verified_claims(request: Request, verifier: Verifier = Depends(get_verifier)) -> dict[str, Any]:
+    """FastAPI dependency: the verified token's claims, or a 401 / 503. The only source of identity."""
     token = _bearer_token(request)
     try:
         key = verifier.keys.get_signing_key_from_jwt(token)
@@ -129,4 +129,9 @@ def current_user(request: Request, verifier: Verifier = Depends(get_verifier)) -
     sub = claims.get("sub")
     if not isinstance(sub, str) or not sub:
         raise _unauthorized("empty or non-string sub", True)
-    return sub
+    return claims
+
+
+def current_user(claims: dict[str, Any] = Depends(verified_claims)) -> str:
+    """FastAPI dependency: the verified token's subject."""
+    return claims["sub"]

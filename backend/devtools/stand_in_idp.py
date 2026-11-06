@@ -44,6 +44,7 @@ class StandIn:
             "iat": now,
             "nbf": now,
             "exp": now + TOKEN_LIFETIME,
+            "ai_planning": True,  # spec 009: every stand-in user may use AI planning
         }
         return jwt.encode(claims, self.key, algorithm="RS256", headers={"kid": KID})
 
