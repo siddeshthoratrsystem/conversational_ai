@@ -13,7 +13,7 @@ export function AlfredHeader({ user, onSignOut }: { user: User; onSignOut: () =>
       </h1>
       <div className="flex items-center gap-3">
         <span className="hidden text-sm text-muted sm:inline">
-          Signed in as <b className="text-navy">{user.displayName}</b>
+          Signed in as <b className="text-navy">{user.name}</b>
         </span>
         <Button variant="link" size="sm" onClick={onSignOut}>
           <LogOut aria-hidden className="size-4" />

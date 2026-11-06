@@ -1,15 +1,27 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 
-import type { HistoryMessage, SessionSummary } from "@convai/core";
+import type { HistoryMessage, Me, SessionSummary } from "@convai/core";
 
-/** Start signed in (sign-in keeps the username and access token in localStorage). */
-export function signInAs(username = "vinod.patil@example.com", token = "test-token") {
-  localStorage.setItem("convai.user", JSON.stringify({ username, token }));
+import { installFakeAuth, type FakeAuth } from "./fakeAuth";
+
+/** Display name for the signed-in user, also returned by GET /api/me. */
+let signedInName = "Vinod";
+
+/**
+ * Start signed in (spec 009): the fake sign-in client already holds a token, as after a sign-in,
+ * so the chat shows straight away. The display name comes from the username, as before.
+ */
+export function signInAs(username = "vinod.patil@example.com"): FakeAuth {
+  signedInName = displayName(username);
+  return installFakeAuth({ providerSession: true, token: "token-0", name: signedInName });
 }
 
-/** The stand-in identity provider's token endpoint (spec 008). */
-export const TOKEN_URL = "http://localhost:8090/default/token";
+/** "vinod.patil@example.com" → "Vinod", as the demo sign-in did. */
+function displayName(username: string): string {
+  const first = username.trim().split("@")[0].split(/[\s._-]+/).find(Boolean) ?? "";
+  return first ? first[0].toUpperCase() + first.slice(1) : "there";
+}
 
 /** Alfred's message box. */
 export const messageBox = () => screen.getByRole("textbox", { name: "Message Alfred" }) as HTMLTextAreaElement;
@@ -31,19 +43,19 @@ export type Server = {
   failList: boolean;
   /** When set, POST /api/chat waits for this promise before answering. */
   holdChat: Promise<void> | null;
-  calls: { method: string; url: string; body?: unknown; auth?: string | null }[];
-  /** Spec 008: token requests received, as form fields. */
-  tokenRequests: Record<string, string>[];
-  /** Spec 008: when true, the token endpoint answers 500. */
-  failToken: boolean;
-  /** Spec 008: when true, every /api/* call answers 401. */
-  rejectToken: boolean;
+  calls: { method: string; url: string; body?: unknown }[];
   /** Spec 004: last feedback body stored per message id. */
   feedback: Map<number, unknown>;
   /** Spec 004: when true, the feedback endpoint answers 500. */
   failFeedback: boolean;
   /** Spec 004: when set, the feedback endpoint waits for this promise before answering. */
   holdFeedback: Promise<void> | null;
+  /** Spec 009: what GET /api/me returns (name defaults to the signInAs() user). */
+  me: Me;
+  /** Spec 009: when true, every /api call answers 401. */
+  rejectAuth: boolean;
+  /** Spec 009: Authorization header of each call, in order (null when absent). */
+  authHeaders: (string | null)[];
 };
 
 let nextId = 1;
@@ -82,12 +94,12 @@ export function installServer(): Server {
     failList: false,
     holdChat: null,
     calls: [],
-    tokenRequests: [],
-    failToken: false,
-    rejectToken: false,
     feedback: new Map(),
     failFeedback: false,
     holdFeedback: null,
+    me: { user_id: "u-vinod", name: signedInName, access: "granted" },
+    rejectAuth: false,
+    authHeaders: [],
   };
 
   vi.stubGlobal(
@@ -95,18 +107,13 @@ export function installServer(): Server {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       const method = init?.method ?? "GET";
-
-      if (method === "POST" && url.href === TOKEN_URL) {
-        const form = Object.fromEntries(new URLSearchParams(String(init?.body)));
-        server.tokenRequests.push(form);
-        if (server.failToken) return json({ error: "boom" }, 500);
-        return json({ access_token: `token-for-${form.username}`, token_type: "Bearer", expires_in: 3600 });
-      }
-
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
-      server.calls.push({ method, url: url.pathname + url.search, body, auth });
-      if (server.rejectToken && url.pathname.startsWith("/api/")) return json({ detail: "missing or invalid bearer token" }, 401);
+      server.calls.push({ method, url: url.pathname + url.search, body });
+      server.authHeaders.push(new Headers(init?.headers).get("Authorization"));
+
+      if (server.rejectAuth) return json({ detail: "invalid or expired sign-in" }, 401);
+
+      if (method === "GET" && url.pathname === "/api/me") return json(server.me);
 
       if (method === "GET" && url.pathname === "/api/sessions") {
         if (server.failList) return json({ detail: "boom" }, 500);
@@ -132,6 +139,7 @@ export function installServer(): Server {
 
       if (method === "POST" && url.pathname === "/api/chat") {
         const { session_id, message: text } = body as { session_id: string; message: string };
+        if (server.me.access === "denied") return json({ detail: "AI planning is not available for this account" }, 403);
         if (server.holdChat) await server.holdChat;
         const reply = `(mock) You said: ${text}`;
         const existing = server.sessions.get(session_id);
@@ -142,7 +150,13 @@ export function installServer(): Server {
         } else {
           server.sessions.set(session_id, { title: text, messages: msgs, lastActive: clock++ });
         }
-        return json({ session_id, reply, intent: null, message_id: msgs[1].id });
+        return json({
+          session_id,
+          reply,
+          intent: null,
+          message_id: msgs[1].id,
+          education_only: server.me.access === "unavailable",
+        });
       }
 
       const fb = url.pathname.match(/^\/api\/messages\/(\d+)\/feedback$/);

@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getHistory, listSessions, sendMessage, submitFeedback, type Feedback, type SessionSummary } from "@convai/core";
+import {
+  ApiError,
+  getHistory,
+  getMe,
+  listSessions,
+  sendMessage,
+  submitFeedback,
+  type Feedback,
+  type Me,
+  type SessionSummary,
+} from "@convai/core";
+import { useAuth } from "@/auth/AuthProvider";
+import { takeResume } from "@/auth/resume";
 import type { User } from "@/auth/user";
 import { cn } from "@convai/ui/cn";
 import { getSessionIds, rememberSession } from "@/sessionStore";
@@ -34,6 +46,15 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
   const [feedback, setFeedback] = useState<Map<number, FeedbackState>>(() => new Map());
   const savingFeedback = useRef<Set<number>>(new Set()); // one save per reply at a time (FR-010)
   const end = useRef<HTMLDivElement>(null);
+  // Spec 009: what the backend says about this customer (access check, whether sign-in is checked).
+  const [me, setMe] = useState<Me | null>(null);
+  const [refused, setRefused] = useState(false); // a send got 403: access was removed
+  // Until /api/me answers, behave as granted; the backend still enforces access on every send.
+  const access = refused ? "denied" : (me?.access ?? "granted");
+
+  useEffect(() => {
+    getMe().then(setMe, () => setMe(null));
+  }, []);
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -86,6 +107,28 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
     [showSession],
   );
 
+  // Spec 009 FR-009: after a lost session, come back to the same chat and unsent text.
+  const { setResumeSource } = useAuth();
+  const resumeState = useRef({ sessionId: activeSessionId, hasMessages: false, draft: "" });
+  resumeState.current = { sessionId: activeSessionId, hasMessages: messages.length > 0, draft: input };
+  useEffect(() => {
+    setResumeSource(() => {
+      const { sessionId, hasMessages, draft } = resumeState.current;
+      return { sessionId: hasMessages ? sessionId : null, draft };
+    });
+    return () => setResumeSource(null);
+  }, [setResumeSource]);
+
+  const resumed = useRef(false); // StrictMode runs effects twice; the saved state is read once
+  useEffect(() => {
+    if (resumed.current) return;
+    resumed.current = true;
+    const resume = takeResume();
+    if (!resume) return;
+    if (resume.sessionId) void openSession(resume.sessionId);
+    setInput(resume.draft);
+  }, [openSession]);
+
   function newChat() {
     // A fresh id only; nothing is stored or sent until the first message (spec FR-008).
     openRequest.current += 1; // drop any history load still in flight
@@ -97,7 +140,7 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
 
   async function sendText(raw: string) {
     const text = raw.trim();
-    if (!text || pending.has(activeSessionId)) return;
+    if (!text || pending.has(activeSessionId) || access === "denied") return;
     const sessionId = activeSessionId;
     const version = viewVersion.current;
     setMessages((m) => [...m, { role: "user", text, time: new Date().toISOString() }]);
@@ -107,13 +150,15 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
     let reply: string;
     let replyId: number | undefined;
     let ok = false;
+    let deniedNow = false;
     try {
       const res = await sendMessage(sessionId, text);
       reply = res.reply;
       replyId = typeof res.message_id === "number" ? res.message_id : undefined;
       ok = true;
-    } catch {
+    } catch (e) {
       reply = "Something went wrong.";
+      deniedNow = e instanceof ApiError && e.status === 403;
     } finally {
       setPending((p) => {
         const next = new Set(p);
@@ -122,6 +167,12 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
       });
     }
 
+    if (deniedNow) {
+      // Nothing was stored: take the message back and show why (spec 009 FR-013).
+      setRefused(true);
+      if (viewVersion.current === version) setMessages((m) => m.slice(0, -1));
+      return;
+    }
     if (ok) {
       rememberSession(sessionId);
       void loadSessions();
@@ -229,7 +280,13 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
                   </button>
                 </div>
               )}
-              {showWelcome && <Welcome name={user.displayName} onAsk={(q) => void sendText(q)} />}
+              {showWelcome && (
+                <Welcome
+                  name={user.displayName}
+                  onAsk={(q) => void sendText(q)}
+                  showSuggestions={access === "granted"}
+                />
+              )}
               {messages.map((m, i) =>
                 m.role === "user" ? (
                   <UserMessage key={`${activeSessionId}-${i}`} text={m.text} time={m.time} />
@@ -258,10 +315,33 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
             </div>
           </div>
           <div className="relative mx-auto w-full max-w-200 px-6">
-            <Composer value={input} onChange={setInput} onSend={() => void sendText(input)} busy={waiting} />
+            {access !== "granted" && <AccessNotice access={access} />}
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSend={() => void sendText(input)}
+              busy={waiting}
+              disabled={access === "denied"}
+            />
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+/** Spec 009 US3: why planning is limited. The next step is a placeholder until the business words it. */
+function AccessNotice({ access }: { access: "denied" | "unavailable" }) {
+  return (
+    <div role="status" className="relative mb-3 rounded-lg border border-line bg-info-50 px-4 py-3 text-sm text-navy">
+      {access === "denied" ? (
+        <>
+          <p className="font-bold">AI planning isn't available for your account.</p>
+          <p>Contact Principal support for help.</p>
+        </>
+      ) : (
+        <p>Right now Alfred can only answer general financial education questions.</p>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { configureApi, getHistory, sendMessage } from "../api";
+import { ApiError, configureApi, getHistory, getMe, sendMessage } from "../api";
 
 describe("configureApi (spec 007 FR-008)", () => {
   const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session_id: "a", messages: [] })));
@@ -24,72 +24,105 @@ describe("configureApi (spec 007 FR-008)", () => {
   });
 });
 
-describe("bearer token (spec 008 FR-028, FR-030)", () => {
-  const ok = () => new Response(JSON.stringify({ session_id: "a", messages: [] }));
-  const fetchMock = vi.fn(async (..._args: unknown[]) => ok());
+describe("sign-in token and errors (spec 009)", () => {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session_id: "a", messages: [] })));
 
   beforeEach(() => vi.stubGlobal("fetch", fetchMock));
   afterEach(() => {
-    configureApi({ baseUrl: "", getToken: () => null, onUnauthorized: () => {} });
-    fetchMock.mockReset();
-    fetchMock.mockImplementation(async () => ok());
+    configureApi({ baseUrl: "", getToken: undefined });
+    fetchMock.mockClear();
     vi.unstubAllGlobals();
   });
 
-  const headersOf = (call: number) => (fetchMock.mock.calls[call][1] as RequestInit | undefined)?.headers as
-    | Record<string, string>
-    | undefined;
-
-  it("sends no Authorization header when baseUrl is the only option, or there is no token", async () => {
-    configureApi({ baseUrl: "" });
+  it("sends the token from getToken as a Bearer header", async () => {
+    configureApi({ getToken: () => "tok-123" });
     await getHistory("a");
-    expect(headersOf(0)?.Authorization).toBeUndefined();
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok-123");
+  });
 
+  it("waits for an async getToken", async () => {
+    configureApi({ getToken: async () => "tok-async" });
+    await getHistory("a");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok-async");
+  });
+
+  it("keeps other headers when adding the token", async () => {
+    configureApi({ getToken: () => "tok-123" });
+    await sendMessage("a", "hi");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bearer tok-123");
+    expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("sends no Authorization header when there is no token", async () => {
     configureApi({ getToken: () => null });
     await getHistory("a");
-    expect(headersOf(1)?.Authorization).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith("/api/chat/a/history", undefined);
   });
 
-  it("sends Authorization: Bearer <token> and keeps the call's own headers", async () => {
-    configureApi({ getToken: () => "tok-1" });
+  it("setting only the base location keeps the token source", async () => {
+    configureApi({ getToken: () => "tok-123" });
+    configureApi({ baseUrl: "https://api.example.com" });
     await getHistory("a");
-    expect(headersOf(0)).toEqual({ Authorization: "Bearer tok-1" });
-
-    await sendMessage("a", "hi");
-    expect(headersOf(1)).toEqual({ "Content-Type": "application/json", Authorization: "Bearer tok-1" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.example.com/api/chat/a/history");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok-123");
   });
 
-  it("reads the token on every request", async () => {
-    let token = "one";
-    configureApi({ getToken: () => token });
-    await getHistory("a");
-    token = "two";
-    await getHistory("a");
-    expect(headersOf(0)?.Authorization).toBe("Bearer one");
-    expect(headersOf(1)?.Authorization).toBe("Bearer two");
+  it("throws ApiError with the status on a non-2xx response", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: "not signed in" }), { status: 401 }));
+    const error = await getHistory("a").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as ApiError).status).toBe(401);
+    expect((error as ApiError).message).toBe("Request failed (401)");
   });
 
-  it("calls onUnauthorized once on a 401, then throws the usual error", async () => {
-    const onUnauthorized = vi.fn();
-    configureApi({ onUnauthorized });
-    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 401 }));
-    await expect(getHistory("a")).rejects.toThrow("Request failed (401)");
+  it("on 401 asks onUnauthorized and retries once with the new token when it succeeds", async () => {
+    let token = "old";
+    configureApi({
+      getToken: () => token,
+      onUnauthorized: async () => {
+        token = "new";
+        return true;
+      },
+    });
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 401 }));
+    await getHistory("a");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer new");
+    configureApi({ onUnauthorized: undefined });
+  });
+
+  it("on 401 throws when onUnauthorized gives up, without retrying", async () => {
+    const onUnauthorized = vi.fn(async () => false);
+    configureApi({ getToken: () => "old", onUnauthorized });
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 401 }));
+    const error = await getHistory("a").catch((e: unknown) => e);
+    expect((error as ApiError).status).toBe(401);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    configureApi({ onUnauthorized: undefined });
   });
 
   it("does not call onUnauthorized for other failures", async () => {
-    const onUnauthorized = vi.fn();
-    configureApi({ onUnauthorized });
-    fetchMock.mockImplementationOnce(async () => new Response("{}", { status: 404 }));
-    await expect(getHistory("a")).rejects.toThrow("Request failed (404)");
+    const onUnauthorized = vi.fn(async () => true);
+    configureApi({ getToken: () => "tok", onUnauthorized });
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 403 }));
+    const error = await getHistory("a").catch((e: unknown) => e);
+    expect((error as ApiError).status).toBe(403);
     expect(onUnauthorized).not.toHaveBeenCalled();
+    configureApi({ onUnauthorized: undefined });
   });
 
-  it("configureApi updates only the options it is given", async () => {
-    configureApi({ baseUrl: "https://api.example.com", getToken: () => "t" });
-    configureApi({ onUnauthorized: () => {} });
-    await getHistory("a");
-    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.com/api/chat/a/history");
-    expect(headersOf(0)?.Authorization).toBe("Bearer t");
+  it("getMe reads GET /api/me", async () => {
+    const me = { user_id: "u1", name: "Alice", access: "granted" };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(me)));
+    expect(await getMe()).toEqual(me);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/me");
   });
 });
