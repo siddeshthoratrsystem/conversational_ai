@@ -83,8 +83,8 @@ education-only mode) and expects `{ "reply": "...", "intent": "..." }` back. Unt
 ## Run locally
 
 ```bash
-# Postgres + backend + stand-in identity provider
-docker compose up --build        # backend on http://localhost:8000, stand-in on http://localhost:8090
+# Postgres + backend + local sign-in service (Keycloak)
+docker compose up --build        # backend on http://localhost:8000, Keycloak on http://localhost:8081
 
 # Frontend
 cd frontend && npm install && npm run web   # http://localhost:5173 (proxies /api to :8000)
@@ -93,27 +93,45 @@ cd frontend && npm install && npm run web   # http://localhost:5173 (proxies /ap
 cd agent && uv run agent.py      # local AgentCore runtime on http://localhost:8080
 ```
 
-## Backend: sign-in check and the local stand-in
+## Sign-in (specs 008 and 009)
 
 The backend needs three settings (see `.env.example`) and won't start without them: `OIDC_ISSUER` (the token's `iss`),
-`OIDC_AUDIENCE` (the `aud` it accepts) and `OIDC_JWKS_URL` (where the provider publishes its public keys). Pointing
-them at the client's Okta instead is a settings change, with no code change. `docker compose` sets them for the
-stand-in, `backend/devtools/stand_in_idp.py` (dev only, port 8090, any username, no password check). It replaces
-mock-oauth2-server, which Docker could not pull from ghcr.io, and has the same paths, issuer and audience.
+`OIDC_AUDIENCE` (the `aud` it accepts) and `OIDC_JWKS_URL` (where the provider publishes its public keys). The web
+app signs customers in with OpenID Connect (authorization code with PKCE); the token stays in memory and is renewed
+silently. Locally, a Keycloak container (realm `convai`, imported from `infra/keycloak/`) stands in for the client's
+Okta, and `docker compose` points the backend at it. Moving to Okta changes settings only. Full checks:
+`specs/009-sign-in-session-access/quickstart.md`.
 
-Get a token and call the API by hand:
+Test users in the local realm only (password = username + `-test`): `alice` (has access), `bob` (no access to AI
+planning), `carol` (has access; sets up a one-time code on first sign-in). Keycloak admin: http://localhost:8081
+(`admin` / `admin`).
+
+Get a token and call the API by hand (the `convai-dev-cli` client exists only in the local realm):
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8090/default/token \
-  -d grant_type=password -d username=alice -d password=x -d client_id=convai-web -d scope=openid \
+TOKEN=$(curl -s http://localhost:8081/realms/convai/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=convai-dev-cli -d username=alice -d password=alice-test \
   | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
 curl -s -X POST http://localhost:8000/api/chat -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"session_id":"demo-1","message":"hi"}'
 ```
 
-The web sign-in page does the same call (`VITE_OIDC_TOKEN_URL` overrides the address). Tests make their own keys and
-tokens and need no identity provider. On an Intel-Mac Python, `requirements-dev.txt` installs a prebuilt `cryptography`
-wheel, because newer versions only publish arm64 wheels for macOS.
+| Setting | Where | Default | Meaning |
+|---|---|---|---|
+| `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL` | backend | none (compose: local Keycloak) | Required; the token check |
+| `ENTITLEMENT_MODE` | backend | `claim` | Access from the token's `ai_planning` claim; `unavailable` forces education only |
+| `ENTITLEMENT_DENY` | backend | empty | Comma-separated user ids or usernames always denied |
+| `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID` | web | local realm, `convai-web` | Change these two for Okta |
+| `VITE_IDLE_TIMEOUT_MINUTES`, `VITE_IDLE_WARNING_MINUTES` | web | `15`, `2` | Idle sign-out and the warning before it |
+
+To use Okta: set `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID` and the three `OIDC_*` settings, and register these
+redirect URIs in Okta: `<origin>/auth/callback`, `<origin>/silent-callback.html` and `<origin>/`. The "next step" text
+for customers without access ("Contact Principal support for help.") is a placeholder until the business words it.
+
+Tests make their own keys and tokens and need no identity provider. `backend/devtools/stand_in_idp.py` (spec 008, any
+username, password grant) still works for quick tokens if you point the three `OIDC_*` settings at it. On an
+Intel-Mac Python, `requirements-dev.txt` installs a prebuilt `cryptography` wheel, because newer versions only publish
+arm64 wheels for macOS.
 
 ## Backend: run and test
 
@@ -152,7 +170,7 @@ import apps.
 
 | Folder | What lives there |
 |--------|------------------|
-| `apps/web/` | The website (Vite): chat screens (`src/chat/`), demo sign-in (`src/auth/`), browser services, tests |
+| `apps/web/` | The website (Vite): chat screens (`src/chat/`), sign-in (`src/auth/`), browser services, tests |
 | `apps/mobile/` | The mobile app (Expo, React Native): starter screen for now |
 | `packages/ui/` | Shared components. `src/button/` has web and native files; `src/web/` holds web-only components |
 | `packages/core/` | API client and types, text parsing and server time parsing. No UI or platform code |
@@ -201,8 +219,8 @@ and the "Good morning" welcome (frame S1) on an empty chat.
   check and bundling if imported in the mobile app. To port one, move it to `packages/ui/src/<name>/` with shared
   types and web and native files, and add it to `exports` in `packages/ui/package.json`. See
   `specs/007-shared-ui-library/contracts/`. On native, `ai` is a solid blue until gradients are supported.
-- **Sign-in is a demo:** any username and password are accepted, only the username is kept (in `localStorage`),
-  and nothing is checked or sent to the backend. Replace `apps/web/src/auth/user.ts` with real authentication later.
+- **Sign-in** (spec 009): `src/auth/` runs the OIDC sign-in, renews the token, signs out after 15 idle minutes (with a
+  warning) and brings the customer back to the same chat and unsent text. `ChatApp` shows the access notices.
 - Answer feedback: thumbs up/down, an optional reason and a comment under each reply, sent to
   `POST /api/messages/{message_id}/feedback` (spec 002). Ratings are shown for the current visit only;
   history does not return them yet. See `specs/004-answer-feedback-ui/`.

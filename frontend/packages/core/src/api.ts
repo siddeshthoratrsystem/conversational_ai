@@ -6,6 +6,14 @@ export type ChatResponse = {
   reply: string;
   intent: string | null;
   message_id: number | null; // id of the assistant message, used for feedback (spec 002)
+  education_only?: boolean | null; // spec 009: true when the access check could not be completed
+};
+
+// Who is signed in and what they may use (spec 009: specs/009-sign-in-session-access/contracts/api-auth.md).
+export type Me = {
+  user_id: string;
+  name: string;
+  access: "granted" | "denied" | "unavailable";
 };
 
 // Answer feedback (spec 002 contract: specs/002-answer-feedback/contracts/feedback-api.md).
@@ -45,31 +53,49 @@ export type SessionsResponse = { sessions: SessionSummary[] };
 
 // The website keeps the relative path. The mobile app has no page origin, so it sets a full address.
 let baseUrl = "";
-let getToken: () => string | null = () => null;
-let onUnauthorized: () => void = () => {};
+// Spec 009: where the sign-in token comes from (the web sign-in, or a host app that embeds the chat).
+let getToken: (() => string | null | Promise<string | null>) | undefined;
+// Spec 009: called on a 401; resolve true once a fresh token is available to retry once with.
+let onUnauthorized: (() => Promise<boolean>) | undefined;
 
-// Each option is optional; only the ones given are changed.
+/** Set the base location, token source and/or 401 handler. Only the options passed are changed. */
 export function configureApi(options: {
   baseUrl?: string;
-  /** Supplies the access token, read on every request (spec 008). */
-  getToken?: () => string | null;
-  /** Called once on any 401, before the call throws (spec 008). */
-  onUnauthorized?: () => void;
+  getToken?: (() => string | null | Promise<string | null>) | undefined;
+  onUnauthorized?: (() => Promise<boolean>) | undefined;
 }): void {
   if (options.baseUrl !== undefined) baseUrl = options.baseUrl.replace(/\/$/, "");
-  if (options.getToken) getToken = options.getToken;
-  if (options.onUnauthorized) onUnauthorized = options.onUnauthorized;
+  if ("getToken" in options) getToken = options.getToken;
+  if ("onUnauthorized" in options) onUnauthorized = options.onUnauthorized;
+}
+
+/** A non-2xx response. `status` lets callers react to 401 and 403 (spec 009). */
+export class ApiError extends Error {
+  constructor(public readonly status: number) {
+    super(`Request failed (${status})`);
+    this.name = "ApiError";
+  }
+}
+
+async function withToken(init?: RequestInit): Promise<RequestInit | undefined> {
+  const token = getToken ? await getToken() : null;
+  if (!token) return init;
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return { ...init, headers };
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
-  const withAuth = token
-    ? { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } }
-    : init;
-  const res = await fetch(baseUrl + url, withAuth);
-  if (res.status === 401) onUnauthorized();
-  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  let res = await fetch(baseUrl + url, await withToken(init));
+  if (res.status === 401 && onUnauthorized && (await onUnauthorized())) {
+    res = await fetch(baseUrl + url, await withToken(init));
+  }
+  if (!res.ok) throw new ApiError(res.status);
   return (await res.json()) as T;
+}
+
+export function getMe(): Promise<Me> {
+  return request<Me>("/api/me");
 }
 
 export function sendMessage(sessionId: string, message: string): Promise<ChatResponse> {

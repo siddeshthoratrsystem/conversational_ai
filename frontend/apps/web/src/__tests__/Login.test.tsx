@@ -1,164 +1,134 @@
-// Sign-in through the local stand-in identity provider (spec 008): any username and password are accepted.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+// Spec 009 US1: the sign-in prompt, signing in and out (contracts/web-auth.md "Screens").
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
-import { displayNameFor, getUser } from "../auth/user";
+import { setAuthClient } from "../auth/client";
+import { installFakeAuth } from "./fakeAuth";
 import { installServer, messageBox, signInAs, type Server } from "./helpers";
-
-const field = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
-
-function signInWith(username: string, password: string) {
-  fireEvent.change(field("Username"), { target: { value: username } });
-  fireEvent.change(field("Password"), { target: { value: password } });
-  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-}
 
 let server: Server;
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
   server = installServer();
 });
 
 afterEach(() => {
   cleanup();
+  setAuthClient(null);
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
-describe("demo sign-in", () => {
-  it("shows the sign-in page, not the chat, when nobody is signed in", () => {
+const prompt = () => screen.findByRole("heading", { level: 1, name: "Sign in to Alfred" });
+
+describe("signed out", () => {
+  it("shows only the sign-in prompt: no chat, history or message box", async () => {
+    installFakeAuth();
     render(<App />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in to Alfred");
-    expect(screen.getByRole("img", { name: "Principal" })).toBeTruthy();
-    expect(field("Password").type).toBe("password");
-    expect(screen.getByText(/uses a local test identity provider/i)).toBeTruthy();
-    expect(screen.queryByText(/nothing is checked or sent/i)).toBeNull();
+    await prompt();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Message Alfred" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Past chats" })).toBeNull();
+    expect(screen.queryByLabelText("Username")).toBeNull(); // the demo fields are gone
+    expect(server.calls.filter((c) => c.url.startsWith("/api/"))).toEqual([]);
   });
 
-  it("asks for both fields and stays on the page until they are filled", () => {
+  it("shows a status while checking for an existing sign-in", () => {
+    installFakeAuth();
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(screen.getByText("Enter your username.")).toBeTruthy();
-    expect(screen.getByText("Enter your password.")).toBeTruthy();
-    expect(field("Username").getAttribute("aria-invalid")).toBe("true");
-
-    signInWith("   ", "secret");
-    expect(screen.getByText("Enter your username.")).toBeTruthy();
-    expect(screen.queryByText("Enter your password.")).toBeNull();
-    expect(getUser()).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Signing in…");
   });
 
-  it("gets a token from the stand-in, then opens the chat and greets the member", async () => {
+  it("goes to the sign-in service on Sign in", async () => {
+    const auth = installFakeAuth();
     render(<App />);
-    signInWith("  vinod.patil@example.com ", "anything");
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(auth.calls).toContain("signInRedirect");
+  });
+});
+
+describe("signing in", () => {
+  it("signs in silently on load when the sign-in service still has a session", async () => {
+    const auth = installFakeAuth({ providerSession: true });
+    render(<App />);
     expect(await screen.findByRole("textbox", { name: "Message Alfred" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 2, name: /vinod/i })).toBeTruthy();
-    expect(server.tokenRequests).toEqual([
-      {
-        grant_type: "password",
-        username: "vinod.patil@example.com",
-        password: "anything",
-        client_id: "convai-web",
-        scope: "openid",
-      },
-    ]);
-    expect(getUser()).toEqual({
-      username: "vinod.patil@example.com",
-      displayName: "Vinod",
-      token: "token-for-vinod.patil@example.com",
-    });
+    expect(auth.calls).toEqual(["signInSilent"]);
   });
 
-  it("shows an error and stays on the page when the stand-in refuses, keeping the fields", async () => {
-    server.failToken = true;
+  it("finishes the sign-in on the callback page and returns to /", async () => {
+    const auth = installFakeAuth();
+    window.history.replaceState(null, "", "/auth/callback?code=abc&state=xyz");
     render(<App />);
-    signInWith("jane", "pw");
-    expect(await screen.findByText(/couldn't sign in/i)).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in to Alfred");
-    expect(field("Username").value).toBe("jane");
-    expect(getUser()).toBeNull();
-    expect(localStorage.getItem("convai.user")).toBeNull();
+    expect(await screen.findByRole("textbox", { name: "Message Alfred" })).toBeTruthy();
+    expect(auth.calls).toEqual(["handleCallback"]);
+    expect(window.location.pathname + window.location.search).toBe("/");
   });
 
-  it("shows an error when the stand-in can't be reached", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
+  it("says so, with Try again, when the sign-in did not complete", async () => {
+    const auth = installFakeAuth();
+    auth.callbackFails = true;
+    window.history.replaceState(null, "", "/auth/callback?error=access_denied");
     render(<App />);
-    signInWith("jane", "pw");
-    expect(await screen.findByText(/couldn't sign in/i)).toBeTruthy();
-    expect(getUser()).toBeNull();
+    await prompt();
+    expect(screen.getByRole("alert").textContent).toContain("Sign-in didn't complete.");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(auth.calls).toContain("signInRedirect");
+    expect(window.location.pathname).toBe("/");
   });
 
-  it("disables the button while signing in", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const real = fetch;
-    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => { await gate; return real(...args); }));
+  it("says so, with Try again, when the sign-in service can't be reached", async () => {
+    const auth = installFakeAuth({ unreachable: true });
     render(<App />);
-    signInWith("jane", "pw");
-    const button = await screen.findByRole("button", { name: "Signing in…" });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    release();
-    await screen.findByRole("textbox", { name: "Message Alfred" });
+    await prompt();
+    expect(screen.getByRole("alert").textContent).toContain("We can't reach the sign-in service right now.");
+    auth.unreachable = false;
+    auth.providerSession = true;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("textbox", { name: "Message Alfred" })).toBeTruthy();
   });
+});
 
-  it("sends the token on every API call", async () => {
-    render(<App />);
-    signInWith("jane", "pw");
-    const box = await screen.findByRole("textbox", { name: "Message Alfred" });
-    fireEvent.change(box, { target: { value: "hello" } });
-    fireEvent.keyDown(box, { key: "Enter" });
-    await waitFor(() => expect(server.calls.some((c) => c.url === "/api/chat")).toBe(true));
-    expect(server.calls.length).toBeGreaterThan(0);
-    expect(server.calls.every((c) => c.auth === "Bearer token-for-jane")).toBe(true);
-  });
-
-  it("returns to sign-in with a notice when an API call is refused with 401", async () => {
-    signInAs("jane", "expired");
-    server.rejectToken = true;
-    localStorage.setItem("convai.sessionIds", JSON.stringify(["a"]));
-    render(<App />);
-    expect(await screen.findByText("Your session has ended. Sign in again.")).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in to Alfred");
-    expect(getUser()).toBeNull();
-  });
-
-  it("treats a stored sign-in without a token (from before spec 008) as signed out", () => {
-    localStorage.setItem("convai.user", JSON.stringify({ username: "jane" }));
-    render(<App />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in to Alfred");
-    expect(getUser()).toBeNull();
-  });
-
-  it("stays signed in after a reload, and never stores the password", async () => {
-    render(<App />);
-    signInWith("jane", "hunter2");
-    await screen.findByRole("textbox", { name: "Message Alfred" });
-    cleanup();
-    render(<App />);
-    expect(messageBox()).toBeTruthy();
-    expect(JSON.stringify({ ...localStorage })).not.toContain("hunter2");
-  });
-
-  it("returns to the sign-in page on Sign out, keeping this browser's chat list", () => {
+describe("signed in", () => {
+  it("shows the name from the sign-in service", async () => {
     signInAs("jane");
+    render(<App />);
+    expect(within(screen.getByRole("banner")).getByText("Jane")).toBeTruthy();
+  });
+
+  it("sends the token with every API call", async () => {
+    signInAs();
+    render(<App />);
+    await screen.findByRole("textbox", { name: "Message Alfred" });
+    await waitFor(() => expect(server.authHeaders.length).toBeGreaterThan(0));
+    expect(server.authHeaders.every((h) => h === "Bearer token-0")).toBe(true);
+  });
+
+  it("signs out at the sign-in service and shows the prompt, keeping this browser's chat list", async () => {
+    const auth = signInAs("jane");
     localStorage.setItem("convai.sessionIds", JSON.stringify(["a"]));
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in to Alfred");
-    expect(screen.queryByText("Your session has ended. Sign in again.")).toBeNull();
-    expect(getUser()).toBeNull();
-    expect(localStorage.getItem("convai.user")).toBeNull(); // the token is discarded
+    await prompt();
+    expect(auth.calls).toContain("signOut");
+    expect(messageBoxGone()).toBe(true);
     expect(localStorage.getItem("convai.sessionIds")).toBe(JSON.stringify(["a"]));
+  });
+
+  it("keeps tokens out of browser storage", async () => {
+    localStorage.setItem("convai.user", JSON.stringify({ username: "old", token: "old-demo-token" }));
+    signInAs();
+    render(<App />);
+    await screen.findByRole("textbox", { name: "Message Alfred" });
+    const stored = JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage });
+    expect(stored).not.toContain("token-0");
+    expect(stored).not.toContain("old-demo-token"); // spec 008's demo entry is removed
   });
 });
 
-describe("displayNameFor", () => {
-  it("uses the first word of the name or email, capitalised", () => {
-    expect(displayNameFor("vinod.patil@example.com")).toBe("Vinod");
-    expect(displayNameFor("jane doe")).toBe("Jane");
-    expect(displayNameFor("  sam_lee ")).toBe("Sam");
-    expect(displayNameFor("@")).toBe("there");
-  });
-});
+function messageBoxGone() {
+  return screen.queryByRole("textbox", { name: "Message Alfred" }) === null;
+}

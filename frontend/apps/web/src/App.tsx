@@ -1,48 +1,26 @@
-import { useState } from "react";
-
-import { configureApi } from "@convai/core";
-
+import { AuthProvider, useAuth } from "@/auth/AuthProvider";
 import { LoginPage } from "@/auth/LoginPage";
-import { getUser, signIn, signOut, type User } from "@/auth/user";
 import { ChatApp } from "@/chat/ChatApp";
 
-const SESSION_ENDED = "Your session has ended. Sign in again.";
-
-/** Shows the (demo) sign-in page until someone signs in, then the Alfred chat. */
+/** Signs the customer in (spec 009), then shows the Alfred chat. */
 export default function App() {
-  const [user, setUser] = useState<User | null>(getUser);
-  const [notice, setNotice] = useState<string | undefined>();
+  return (
+    <AuthProvider>
+      <Screens />
+    </AuthProvider>
+  );
+}
 
-  // Every API call carries the token; a 401 means it is no longer good, so go back to sign-in.
-  // Set during render so it is in place before the chat makes its first request.
-  configureApi({
-    getToken: () => getUser()?.token ?? null,
-    onUnauthorized: () => {
-      signOut();
-      setUser(null);
-      setNotice(SESSION_ENDED);
-    },
-  });
+function Screens() {
+  const { state, signIn, retry, signOut } = useAuth();
 
-  if (!user) {
+  if (state.status === "starting") {
     return (
-      <LoginPage
-        notice={notice}
-        onSignIn={async (username, password) => {
-          setUser(await signIn(username, password));
-          setNotice(undefined);
-        }}
-      />
+      <p role="status" className="flex min-h-full items-center justify-center bg-page text-muted">
+        Signing in…
+      </p>
     );
   }
-  return (
-    <ChatApp
-      user={user}
-      onSignOut={() => {
-        signOut();
-        setUser(null);
-        setNotice(undefined);
-      }}
-    />
-  );
+  if (state.status === "signed-out") return <LoginPage reason={state.reason} onSignIn={signIn} onRetry={retry} />;
+  return <ChatApp user={state.user} onSignOut={signOut} />;
 }

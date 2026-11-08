@@ -15,6 +15,7 @@
     "@fontsource/source-sans-3": "^5.3.1",
     "@tailwindcss/vite": "^4.3.4",
     "lucide-react": "^1.68.0",
+    "oidc-client-ts": "^3.5.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "tailwindcss": "^4.3.4"

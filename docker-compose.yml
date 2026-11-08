@@ -13,25 +13,26 @@ services:
     environment:
       DATABASE_URL: postgresql://app:app@db:5432/convai
       AGENT_URL: ${AGENT_URL:-}
-      # Sign-in check (spec 008). The issuer is the name in the token (as seen from the browser);
-      # the keys are fetched over the compose network.
-      OIDC_ISSUER: http://localhost:8090/default
+      # Sign-in check (spec 008) against the local Keycloak (spec 009). The issuer is the name in the
+      # token (as seen from the browser); the keys are fetched over the compose network.
+      OIDC_ISSUER: http://localhost:8081/realms/convai
       OIDC_AUDIENCE: convai-api
-      OIDC_JWKS_URL: http://oidc:8090/default/jwks
+      OIDC_JWKS_URL: http://keycloak:8081/realms/convai/protocol/openid-connect/certs
+      ENTITLEMENT_DENY: ${ENTITLEMENT_DENY:-}
+      ENTITLEMENT_MODE: ${ENTITLEMENT_MODE:-claim}
     ports: ["8000:8000"]
-    depends_on: [db, oidc]
+    depends_on: [db, keycloak]
 
-  # Dev-only stand-in identity provider (backend/devtools/stand_in_idp.py). It replaces
-  # mock-oauth2-server, which Docker could not pull from ghcr.io. Any username works.
-  oidc:
-    build: ./backend
-    command: python -m devtools.stand_in_idp
+  # Local sign-in service standing in for the client's Okta (spec 009): test users, one-time-code
+  # MFA, realm imported from infra/keycloak at start. Dev only.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: start-dev --import-realm --http-port=8081
     environment:
-      STAND_IN_PORT: "8090"
-      STAND_IN_ISSUER: http://localhost:8090/default
-      STAND_IN_AUDIENCE: convai-api
-    volumes: ["./backend/devtools:/app/devtools:ro"]
-    ports: ["8090:8090"]
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:-admin}
+    ports: ["8081:8081"]
+    volumes: ["./infra/keycloak:/opt/keycloak/data/import:ro"]
 
 volumes:
   pgdata:

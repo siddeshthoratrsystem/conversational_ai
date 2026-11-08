@@ -29,7 +29,16 @@ export function greetingFor(date: Date): string {
  * Sized to fit above the composer: the cards go 1 → 2 → 4 across with the space this section gets (a container
  * query, so the History panel counts), and short screens drop the orb and tighten the spacing.
  */
-export function Welcome({ name, onAsk }: { name: string; onAsk: (question: string) => void }) {
+export function Welcome({
+  name,
+  onAsk,
+  showSuggestions = true,
+}: {
+  name: string;
+  onAsk: (question: string) => void;
+  /** Spec 009: planning shortcuts are hidden without full access. */
+  showSuggestions?: boolean;
+}) {
   return (
     <section className="@container flex w-full flex-col items-center gap-6 py-4 [@media(max-height:760px)]:gap-4 [@media(max-height:760px)]:py-0">
       <AlfredOrb className="size-12 [@media(max-height:760px)]:hidden" />
@@ -41,18 +50,20 @@ export function Welcome({ name, onAsk }: { name: string; onAsk: (question: strin
         information only.
       </p>
       {/* Figma S1 card: icon, bold title, short text, then the full-width gradient button. */}
-      <div className="grid w-full grid-cols-1 gap-2.75 @xl:grid-cols-2 @4xl:grid-cols-4">
-        {SUGGESTIONS.map(({ icon: Icon, question, detail }) => (
-          <article key={question} className="flex flex-col gap-3 rounded-lg border border-line bg-white p-5 shadow-hairline">
-            <Icon aria-hidden className="size-10 text-accent" strokeWidth={1.5} />
-            <h3 className="pt-1 text-lg font-bold text-navy">{question}</h3>
-            <p className="flex-1 text-sm text-muted">{detail}</p>
-            <AiButton className="mt-1 w-full" aria-label={`Ask Alfred: ${question}`} onClick={() => onAsk(question)}>
-              Ask Alfred
-            </AiButton>
-          </article>
-        ))}
-      </div>
+      {showSuggestions && (
+        <div className="grid w-full grid-cols-1 gap-2.75 @xl:grid-cols-2 @4xl:grid-cols-4">
+          {SUGGESTIONS.map(({ icon: Icon, question, detail }) => (
+            <article key={question} className="flex flex-col gap-3 rounded-lg border border-line bg-white p-5 shadow-hairline">
+              <Icon aria-hidden className="size-10 text-accent" strokeWidth={1.5} />
+              <h3 className="pt-1 text-lg font-bold text-navy">{question}</h3>
+              <p className="flex-1 text-sm text-muted">{detail}</p>
+              <AiButton className="mt-1 w-full" aria-label={`Ask Alfred: ${question}`} onClick={() => onAsk(question)}>
+                Ask Alfred
+              </AiButton>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

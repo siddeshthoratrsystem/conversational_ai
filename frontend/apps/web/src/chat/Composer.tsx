@@ -12,12 +12,15 @@ export function Composer({
   onChange,
   onSend,
   busy,
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
   /** A reply is pending: Send is disabled. */
   busy: boolean;
+  /** Spec 009: no access to AI planning; nothing can be typed or sent. */
+  disabled?: boolean;
 }) {
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -27,7 +30,7 @@ export function Composer({
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      if (!busy) e.currentTarget.form?.requestSubmit();
+      if (!busy && !disabled) e.currentTarget.form?.requestSubmit();
     }
   }
 
@@ -52,6 +55,7 @@ export function Composer({
           placeholder="Ask anything about your money…"
           rows={1}
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           className="field-sizing-content max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent py-1 text-base text-ink outline-none placeholder:text-muted"
@@ -60,7 +64,7 @@ export function Composer({
         <button
           type="submit"
           aria-label="Send"
-          disabled={busy}
+          disabled={busy || disabled}
           className="grid size-8 shrink-0 place-items-center rounded-full bg-ai text-white transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Soundwave className="size-4" />
