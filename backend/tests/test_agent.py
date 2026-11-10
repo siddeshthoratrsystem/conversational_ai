@@ -60,3 +60,57 @@ def test_timeout_raises_agent_error(mock_agent):
     mock_agent(handler)
     with pytest.raises(agent.AgentError, match="ReadTimeout"):
         agent.call_agent("http://agent/invocations", "s1", "hello")
+
+
+# --- spec 011: the optional `action` in the agent's response ---------------------------------
+
+ACTION = {"type": "contribution_change", "params": {"new_rate_pct": 8}}
+
+
+def test_action_is_returned_when_valid(mock_agent):
+    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "action": ACTION}))
+    result = agent.call_agent("http://agent/invocations", "s1", "change it to 8%")
+    assert result.action == ACTION
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"reply": "ok", "intent": None}, {"reply": "ok", "intent": None, "action": None}],
+    ids=["absent", "null"],
+)
+def test_action_is_none_when_absent_or_null(mock_agent, body):
+    mock_agent(lambda r: httpx.Response(200, json=body))
+    assert agent.call_agent("http://agent/invocations", "s1", "hi").action is None
+
+
+@pytest.mark.parametrize(
+    "bad_action",
+    [
+        "contribution_change",
+        ["contribution_change"],
+        {"type": 5, "params": {}},
+        {"type": "contribution_change", "params": "8"},
+        {"type": "contribution_change"},
+        {"params": {"new_rate_pct": 8}},
+    ],
+    ids=["string", "list", "type-not-string", "params-not-object", "no-params", "no-type"],
+)
+def test_malformed_action_is_ignored_with_a_warning_and_reply_is_kept(mock_agent, caplog, bad_action):
+    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "action": bad_action}))
+    with caplog.at_level("WARNING", logger="app.agent"):
+        result = agent.call_agent("http://agent/invocations", "s1", "hi")
+    assert result.reply == "ok"
+    assert result.action is None
+    assert any("action" in rec.message for rec in caplog.records)
+
+
+def test_request_body_is_unchanged_by_the_action_field(mock_agent):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"reply": "ok", "intent": None})
+
+    mock_agent(handler)
+    agent.call_agent("http://agent/invocations", "s1", "hello")
+    assert requests[0].read() == b'{"prompt":"hello","session_id":"s1"}'

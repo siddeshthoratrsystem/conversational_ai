@@ -1,9 +1,11 @@
+import logging
 import time
 from dataclasses import dataclass
 
 import httpx
 
 AGENT_TIMEOUT_SECONDS = 10
+logger = logging.getLogger("app.agent")
 
 
 class AgentError(Exception):
@@ -15,6 +17,8 @@ class AgentReply:
     reply: str
     intent: str | None
     latency_ms: int
+    # Spec 011: what the agent asked to do, {"type": str, "params": dict}. The action gate decides.
+    action: dict | None = None
 
 
 def call_agent(url: str, session_id: str, message: str, education_only: bool = False) -> AgentReply:
@@ -44,4 +48,14 @@ def call_agent(url: str, session_id: str, message: str, education_only: bool = F
         raise AgentError("malformed agent response: missing 'reply'")
     if intent is not None and not isinstance(intent, str):
         raise AgentError("malformed agent response: 'intent' is not a string")
-    return AgentReply(reply=reply, intent=intent, latency_ms=latency_ms)
+    return AgentReply(reply=reply, intent=intent, latency_ms=latency_ms, action=_parse_action(data.get("action")))
+
+
+def _parse_action(action) -> dict | None:
+    """A well-formed action, or None. A malformed one is ignored (logged) and the reply is kept."""
+    if action is None:
+        return None
+    if isinstance(action, dict) and isinstance(action.get("type"), str) and isinstance(action.get("params"), dict):
+        return {"type": action["type"], "params": action["params"]}
+    logger.warning("Ignoring malformed 'action' in agent response")
+    return None

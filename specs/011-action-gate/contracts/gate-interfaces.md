@@ -19,7 +19,13 @@ class ActionType(Protocol):
         # runs the change through its service; returns the result message
 ```
 
-Registry: `ACTION_TYPES: dict[str, ActionType]`. Adding account opening, funding or transfers
+Optional: `cancel_message(snapshot) -> str` gives the type its own cancel wording; without it the
+gate says "Cancelled. Nothing was changed." `GateRefusal(reason, message=None)` may carry the plain
+sentence for the participant (for example the allowed range).
+
+Registry: `ACTION_TYPES: dict[str, ActionFactory]`, where `ActionFactory = Callable[[ActionContext], ActionType]`
+and `ActionContext` holds the request's `db`, `settings` and `contributions` service. A factory is used
+because an action type needs the per-request service. Adding account opening, funding or transfers
 means adding an entry. The gate flow does not change.
 
 ## `ContributionService` (the only way the gate reads or changes contributions; FR-021)
@@ -31,7 +37,7 @@ class ContributionService(Protocol):
                      token: ConfirmationToken) -> int: ...  # returns the new rate
 ```
 
-- `DemoContributionService(db, seed, redeem)`: `current_rate` reads `contributions`, falling back
+- `DemoContributionService(db, seed=None, redeem=None)` (the seed is read when needed; `redeem` defaults to `gate.redeem_token`): `current_rate` reads `contributions`, falling back
   to the seed. `apply_change` calls `redeem(token)` first (single use; research R5), then upserts
   `contributions`.
 - A future `PrincipalContributionService` keeps the same two methods. It redeems the token the
@@ -53,11 +59,11 @@ class StepUpCheck(Protocol):
 ## `ActionGate` (the flow; called only from `POST /api/chat`)
 
 ```python
-class ActionGate:
-    def classify_reply(self, db, participant_id, session_id, message) -> ReplyKind | None: ...
+class ActionGate:                                # built per request: ActionGate(db, settings, contributions)
+    def classify_reply(self, message) -> ReplyKind | None: ...
         # read-only, before the agent call: CONFIRM, CANCEL or NOT_EXACT, or None (send to the agent)
-    def handle_reply(self, db, participant_id, session_id, kind, education_only, claims) -> GateResult: ...
-    def handle_proposal(self, db, participant_id, session_id, action: dict, education_only) -> GateResult: ...
+    def handle_reply(self, participant_id, session_id, kind, education_only, claims) -> GateResult: ...
+    def handle_proposal(self, participant_id, session_id, action: dict, education_only) -> GateResult: ...
 ```
 
 - The `handle_*` methods run inside `_persist`'s transaction (research R6). They write state and

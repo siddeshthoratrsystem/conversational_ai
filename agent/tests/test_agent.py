@@ -72,5 +72,6 @@ def test_build_agent_registers_only_read_only_tools():
         "get_holdings",
         "get_rebalancing_summary",
         "project_savings",
+        "request_contribution_change",
     ]
     assert agent.system_prompt == SYSTEM_PROMPT

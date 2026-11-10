@@ -2,6 +2,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from collections.abc import Callable
+from functools import partial
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -11,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from app import feedback, models
+from app.actions import contribution
+from app.actions.gate import ActionGate, GateResult, load_settings
 from app import auth
 from app.auth import current_user, verified_claims
 from app.agent import AgentError, call_agent
@@ -55,7 +59,7 @@ class HistoryMessage(BaseModel):
     content: str
     intent: str | None
     latency_ms: int | None
-    source: Literal["agent", "mock"] | None
+    source: Literal["agent", "mock", "gate"] | None
     created_at: datetime
 
 
@@ -105,6 +109,7 @@ def _reply_for(session_id: str, message: str, education_only: bool = False) -> d
                 "intent": result.intent,
                 "latency_ms": result.latency_ms,
                 "source": "agent",
+                "action": result.action,
             }
         except AgentError as e:
             logger.warning(
@@ -115,6 +120,7 @@ def _reply_for(session_id: str, message: str, education_only: bool = False) -> d
         "intent": None,
         "latency_ms": None,
         "source": "mock",
+        "action": None,
     }
 
 
@@ -142,11 +148,26 @@ def _check_owner(db: DbSession, session_id: str, user_id: str) -> bool:
     return True
 
 
+def get_action_gate(
+    db: DbSession = Depends(get_db),
+    contributions=Depends(contribution.get_contribution_service),
+) -> ActionGate:
+    return ActionGate(db, load_settings(), contributions)
+
+
 def _persist(
-    db: DbSession, session_id: str, user_id: str, message: str, result: dict, access: str
+    db: DbSession,
+    session_id: str,
+    user_id: str,
+    message: str,
+    result: dict,
+    access: str,
+    gate_step: Callable[[], GateResult] | None = None,
 ) -> int:
     """Store the session (if new) plus the user and assistant messages in one transaction, and
     record this turn's access result on the session (spec 009).
+
+    A gate step, when given, runs after the session row exists and supplies the reply.
 
     A new session is owned by the caller. If another user's session turned up meanwhile, the
     answer is the same 404 and nothing is stored. Returns the id of the assistant message.
@@ -162,6 +183,12 @@ def _persist(
             else:
                 session = db.get(models.Session, session_id)
                 session.access, session.access_checked_at = access, checked_at
+            if gate_step is not None:
+                # Spec 011: the gate's state, audit rows and reply are written in this same
+                # transaction. Its text replaces the model's (FR-013).
+                # `result` is updated in place so the caller returns the same text.
+                outcome = gate_step()
+                result.update(reply=outcome.reply_text, intent=None, latency_ms=None, source="gate")
             db.add(models.Message(session_id=session_id, role="user", content=message))
             assistant = models.Message(
                 session_id=session_id,
@@ -200,6 +227,7 @@ def chat(
     user_id: str = Depends(current_user),
     claims: dict[str, Any] = Depends(verified_claims),
     db: DbSession = Depends(get_db),
+    gate: ActionGate = Depends(get_action_gate),
 ):
     if not req.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id must not be empty")
@@ -219,8 +247,19 @@ def chat(
 
     # The agent is called before writing so no transaction is held open during the HTTP call;
     # both messages are still written and committed together afterwards.
-    result = _reply_for(req.session_id, req.message, education_only)
-    message_id = _persist(db, req.session_id, user_id, req.message, result, access)
+    # Spec 011: the participant's own "confirm" or "cancel" is handled here and never reaches the
+    # model. (Education-only handling of actions comes with the next user story: until then the
+    # gate does nothing in that mode, so no action can be staged or run.)
+    gate_step = None
+    kind = None if education_only else gate.classify_reply(req.message)
+    if kind is not None:
+        result = {"reply": "", "intent": None, "latency_ms": None, "source": "gate"}
+        gate_step = partial(gate.handle_reply, user_id, req.session_id, kind)
+    else:
+        result = _reply_for(req.session_id, req.message, education_only)
+        if result["action"] and not education_only:
+            gate_step = partial(gate.handle_proposal, user_id, req.session_id, result["action"])
+    message_id = _persist(db, req.session_id, user_id, req.message, result, access, gate_step)
     extra = {"education_only": True} if education_only else {}
     return ChatResponse(
         session_id=req.session_id,

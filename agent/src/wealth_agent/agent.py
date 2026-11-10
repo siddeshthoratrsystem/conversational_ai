@@ -8,6 +8,7 @@ from typing import Any
 from strands import Agent
 from strands.models.model import Model
 
+from wealth_agent.action_tools import ACTION_TOOLS
 from wealth_agent.prompts import DISCLAIMER, SYSTEM_PROMPT
 from wealth_agent.tools import STRANDS_TOOLS
 
@@ -15,7 +16,7 @@ from wealth_agent.tools import STRANDS_TOOLS
 def build_agent(model: Model, quiet: bool = False) -> Agent:
     """Create the agent. `quiet=True` disables Strands' default streaming to stdout."""
     kwargs: dict[str, Any] = {"callback_handler": None} if quiet else {}
-    return Agent(model=model, tools=list(STRANDS_TOOLS), system_prompt=SYSTEM_PROMPT, **kwargs)
+    return Agent(model=model, tools=[*STRANDS_TOOLS, *ACTION_TOOLS], system_prompt=SYSTEM_PROMPT, **kwargs)
 
 
 def ask(agent: Callable[[str], Any], text: str) -> str:

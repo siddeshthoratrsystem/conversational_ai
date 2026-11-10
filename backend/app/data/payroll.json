@@ -1,0 +1,7 @@
+{
+  "currency": "USD",
+  "annual_salary": 100000,
+  "employer_match": { "match_pct": 100, "cap_pct_of_pay": 5 },
+  "starting_contribution_pct": 5,
+  "note": "Demo data, the same for every participant and never modified at runtime. Not Principal policy."
+}

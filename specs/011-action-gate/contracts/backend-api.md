@@ -29,7 +29,7 @@ blank line; it is not repeated in the rows.
 
 | Situation | Message |
 |---|---|
-| Staged | "Here's the change you asked for. Nothing has changed yet.\n- 401(k) contribution: {cur}% → {new}%\n- Your contribution: {c0} → {c1} a month ({±dc})\n- Employer match: {m0} → {m1} a month ({±dm})" + match line + "\nReply **confirm** within {n} minutes to make this change, or **cancel** to keep {cur}%." |
+| Staged | "Here's the change you asked for. Nothing has changed yet.\n- 401(k) contribution: {cur}% → {new}%\n- Your contribution: {c0} → {c1} a month ({±dc})\n- Employer match: {m0} → {m1} a month ({±dm})" + match line + "\n\nReply **confirm** within {n} minutes to make this change, or **cancel** to keep {cur}%." |
 | Match unchanged | The employer-match line reads "- Employer match: {m0} a month (no change)" |
 | Below the cap | Adds "\nHeads-up: at {new}% you would miss {missed} a month of employer match. The match is {match}% of what you contribute, up to {cap}% of pay." |
 | Executed | "Done. Your 401(k) contribution is now {new}% (it was {cur}%)." |
@@ -43,6 +43,7 @@ blank line; it is not repeated in the rows.
 | Nothing pending | "There's no pending change to confirm." / "…to cancel." |
 | Other chat | "That change can only be confirmed or cancelled in the chat where you asked for it." |
 | Not exact reply | "To make the pending change, reply exactly **confirm**; to keep things as they are, reply **cancel**. To ask for a different rate, just tell me the new rate." |
+| Unreadable request | "I couldn't read that change request, so nothing was changed." (`invalid_params`) |
 | Already handled | "That change has already been handled." |
 | Step-up refused | "This change needs an extra sign-in check, which isn't available yet, so nothing was changed." |
 | Stale | "Your contribution changed since this was proposed, so nothing was changed. Ask again to see the new figures." |

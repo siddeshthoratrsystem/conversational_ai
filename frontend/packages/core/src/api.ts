@@ -28,7 +28,7 @@ export type HistoryMessage = {
   content: string;
   intent: string | null;
   latency_ms: number | null;
-  source: "agent" | "mock" | null;
+  source: "agent" | "mock" | "gate" | null;
   created_at: string;
 };
 
