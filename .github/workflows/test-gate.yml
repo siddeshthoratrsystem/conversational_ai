@@ -30,6 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Lint backend
+        run: python -m ruff check --select E4,E7,E9,F .
+
       - name: Run backend tests
         run: python -m pytest
 
@@ -53,6 +56,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Lint agent
+        run: python -m ruff check .
+
       - name: Run agent tests
         run: python -m pytest
 
@@ -72,7 +78,35 @@ jobs:
           node-version: '20'
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Check frontend types and build
+        run: npm run build
 
       - name: Run frontend tests
         run: npm test
+
+  patch-hygiene:
+    name: Patch hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install spelling checker
+        run: python -m pip install codespell==2.4.1
+
+      - name: Check changed-file spelling and whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          git diff --check "$BASE_SHA...$HEAD_SHA"
+          git diff --name-only --diff-filter=ACMR -z "$BASE_SHA...$HEAD_SHA" | xargs -0 -r codespell
