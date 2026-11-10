@@ -154,7 +154,7 @@ schema change for the same information).
 ## R10. Disclaimer on gate messages
 
 **Decision**: Gate messages do not carry spec 005's investment disclaimer. They are system
-statements about a demo change, not answers, and each one says that it uses demo data.
+statements about a demo change, not answers, and each one ends with the line "Demo data: no real account was changed." (added in code by one helper).
 
 **Rationale**: Spec 005 FR-005 applies to agent answers, and the agent's own replies still get it.
 Appending it to "Your contribution is now 8%" would read as noise. Spec 005 is unchanged.

@@ -23,14 +23,16 @@ gate's refusals are ordinary `200` replies, not HTTP errors. Existing errors are
 
 ## Gate message texts (defaults; covered by tests)
 
-Amounts are formatted as `$1,234.56`. Placeholders are in braces.
+Amounts are formatted as `$1,234.56`. Placeholders are in braces. The code appends the footer
+`Demo data: no real account was changed.` as the last line of every message in this table, after a
+blank line; it is not repeated in the rows.
 
 | Situation | Message |
 |---|---|
-| Staged | "Here's the change you asked for. Nothing has changed yet.\n- 401(k) contribution: {cur}% → {new}%\n- Your contribution: {c0} → {c1} a month ({±dc})\n- Employer match: {m0} → {m1} a month ({±dm})" + match line + "\nReply **confirm** within {n} minutes to make this change, or **cancel** to keep {cur}%. (Demo data only.)" |
+| Staged | "Here's the change you asked for. Nothing has changed yet.\n- 401(k) contribution: {cur}% → {new}%\n- Your contribution: {c0} → {c1} a month ({±dc})\n- Employer match: {m0} → {m1} a month ({±dm})" + match line + "\nReply **confirm** within {n} minutes to make this change, or **cancel** to keep {cur}%." |
 | Match unchanged | The employer-match line reads "- Employer match: {m0} a month (no change)" |
 | Below the cap | Adds "\nHeads-up: at {new}% you would miss {missed} a month of employer match. The match is {match}% of what you contribute, up to {cap}% of pay." |
-| Executed | "Done. Your 401(k) contribution is now {new}% (it was {cur}%). This changed demo data only." |
+| Executed | "Done. Your 401(k) contribution is now {new}% (it was {cur}%)." |
 | Cancelled | "Cancelled. Your 401(k) contribution stays at {cur}%." |
 | Replaced | The staged message for the new proposal, preceded by "I've replaced your earlier pending change." |
 | Expired | "That change expired after {n} minutes, so nothing was changed. Ask again if you still want it." |

@@ -187,6 +187,15 @@ Plan decisions that change spec wording:
 - Edge case: confirm and cancel still work when the agent is down.
 - New edge case: a stale snapshot.
 
+### Gate message footer
+
+Every message written by the gate (staged summary, executed, cancelled, expired, every refusal)
+ends with its own last line, added in code by one helper: `Demo data: no real account was changed.`
+The footer is not part of the message texts in `contracts/backend-api.md`; the helper appends it
+after a blank line. Replies that come from the model are not given this line. The "(Demo data
+only.)" and "This changed demo data only." phrases inside the staged and executed texts are removed
+to avoid repeating it. A test checks that every gate message ends with exactly this line, once.
+
 ### Agent prompt change (prompts.py)
 
 Add guidance for the new tool to the system prompt: when the participant asks to change their
