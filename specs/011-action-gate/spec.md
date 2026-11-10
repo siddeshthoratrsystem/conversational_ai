@@ -27,8 +27,8 @@ to choose a new 401(k) contribution rate in the chat and confirm it before it is
 that the change is exactly what I intended."
 
 Related: BL-061 (contribution changes; real changes are on hold until the client decides
-whether contribution changes are in scope) and step-up authentication (the step-up (extra
-sign-in check) method is still to be decided).
+whether contribution changes are in scope) and step-up authentication (method still to be
+decided).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -60,7 +60,7 @@ with "cancel" and check that the contribution is unchanged.
 5. **Given** a participant at 5%, **When** they ask for 51% (outside the demo range of 0–50%), **Then** the agent gives a plain reason, for example "The contribution rate must be between 0% and 50%", and no change is pending.
 6. **Given** a participant at 5%, **When** they ask for 5%, **Then** the agent says their contribution is already 5% and no change is pending.
 7. **Given** a participant at 5%, **When** they ask for 8.5%, **Then** the agent says the rate must be a whole percentage and no change is pending.
-8. **Given** a participant who confirmed a change to 8%, **When** the agent is restarted and they ask for a new change, **Then** the summary shows their current rate as 8%.
+8. **Given** a participant who confirmed a change to 8%, **When** the agent or the back end is restarted and they ask for a new change, **Then** the summary shows their current rate as 8%.
 
 ---
 
@@ -89,7 +89,7 @@ contribution is unchanged and the attempt is recorded as refused.
 8. **Given** participant A's confirmation token, **When** it is presented for participant B, **Then** it is refused and neither contribution changes.
 9. **Given** a participant whose chat is in education-only mode, **When** they ask to change their contribution, **Then** the agent says it can't make changes right now and nothing is staged.
 10. **Given** a pending change, **When** the participant's chat is in education-only mode and they reply "confirm", **Then** nothing is executed.
-11. **Given** a request that reaches the agent without a verified participant ID, **When** a change is proposed or confirmed, **Then** it is refused and nothing is staged or executed.
+11. **Given** a gate step that runs without a verified participant ID, **When** a change is proposed or confirmed, **Then** it is refused and nothing is staged or executed.
 12. **Given** a participant has a pending change proposed in chat session 1, **When** they reply "confirm" in chat session 2, **Then** nothing is executed, they are told the change can be confirmed only in the chat where it was proposed, and the change stays pending in chat session 1 until it expires.
 
 ---
@@ -144,11 +144,12 @@ fields.
 - The participant proposes a new change while one is pending: the earlier change is cancelled (recorded as cancelled, replaced) and the new one is staged. A participant has at most one pending contribution change.
 - The participant replies "confirm" or "cancel" with nothing pending: the agent says there is nothing to confirm or cancel; the attempt is recorded as rejected.
 - Two "confirm" replies for the same change arrive at the same time (two tabs): the change runs once; the second is refused.
-- The agent restarts between the proposal and "confirm": the pending change survives and can still be confirmed before it expires. The conversation itself is not remembered (session memory is BL-012).
+- The agent or the back end restarts between the proposal and "confirm": the pending change survives and can still be confirmed before it expires. The conversation itself is not remembered (session memory is BL-012).
 - The participant replies "confirm" in a different chat of their own: refused, because a pending change can be confirmed only in the chat session where it was proposed (User Story 2, scenario 12).
 - Expiry is noticed the next time the participant proposes, confirms or cancels: the change is recorded as expired then, and can no longer run.
 - Applying the change fails (for example, the store can't be written): nothing changes, the participant is told it didn't go through and can try again, and the step is recorded as failed.
-- The back end can't reach the agent and returns its mock reply: no action is proposed or run.
+- The back end can't reach the agent and returns its mock reply: no action is proposed. "Confirm" and "cancel" still work, because they don't need the agent.
+- The participant's current rate changed between the summary and "confirm" (not possible with demo data, but possible with a real recordkeeper): nothing runs, and they are asked to propose again so they see the new figures.
 - The model claims a change was made when the gate didn't execute it: the reply about the outcome comes from the gate, not the model, so this can't show up as a success.
 - The participant gives the rate in words ("eight percent") or with a percent sign: the request is understood as 8%. The checks apply to the number the gate receives, whatever the wording.
 - Text inside tool output or demo data that says to skip confirmation: treated as data (spec 005 FR-008); it changes nothing.
@@ -171,14 +172,14 @@ fields.
 - **FR-009**: "Cancel" (demo default accepted reply: "cancel") MUST discard the pending change with nothing changed.
 - **FR-010**: A participant MUST have at most one pending change per action type. A new proposal replaces the pending one, which is recorded as cancelled.
 - **FR-011**: The gate MUST NOT let a participant propose, confirm, cancel or run any action when their chat is in education-only mode. The gate honours the education-only flag for actions only; the agent's other behaviour under the flag is not changed by this spec.
-- **FR-012**: The gate MUST have a defined step before running a change where an extra identity check (step-up authentication; the step-up (extra sign-in check) method is still to be decided) can be required later. In this spec that step always passes, and a test MUST show that if it refuses, nothing runs.
+- **FR-012**: The gate MUST have a defined step before running a change where an extra identity check, step-up authentication (method still to be decided), can be required later. In this spec that step always passes, and a test MUST show that if it refuses, nothing runs.
 - **FR-013**: Messages to the participant about the outcome (staged, executed, cancelled, expired, refused, failed) MUST come from the gate's result, not be composed by the model, so the agent can't report a change that didn't happen.
 
 **Identity and isolation**
 
 - **FR-014**: The gate MUST act only for the participant identity verified by the back end (specs 008/009). That identity MUST NOT come from chat text or from the model.
-- **FR-015**: The back end MUST pass the verified participant ID to the agent with every message. This is an additive, optional field on the back end to agent contract; existing fields are unchanged.
-- **FR-016**: If the agent receives a message without a verified participant ID, the gate MUST refuse every action (fail closed). Read-only questions keep working.
+- **FR-015**: The gate MUST take the participant ID only from the sign-in token verified by the back end. No participant ID is sent to or accepted from the agent.
+- **FR-016**: If a gate step runs without a verified participant ID, the gate MUST refuse every action (fail closed). Read-only questions keep working.
 - **FR-017**: One participant's proposals, pending changes, tokens, contribution and record MUST NOT affect or be visible to another participant.
 
 **Contribution change action**
@@ -192,7 +193,7 @@ fields.
 
 **Persistence and record**
 
-- **FR-024**: Each participant's current contribution, pending changes and record MUST be kept in a persistent store that survives agent restarts.
+- **FR-024**: Each participant's current contribution, pending changes and record MUST be kept in a persistent store that survives restarts of the agent and the back end.
 - **FR-025**: Every step (proposed, rejected, staged, confirmed, cancelled, expired, executed, failed) MUST be recorded with the participant ID, time, action type, a reference to the staged change where one exists, and the outcome with its reason. The record MUST NOT contain chat text or any other personal data.
 
 **Configuration and boundaries**
@@ -200,7 +201,7 @@ fields.
 - **FR-026**: All limits (rate range, whole-percentage rule, expiry time, accepted confirm and cancel replies) MUST be settings with demo defaults. They are not Principal policy, and the settings and their defaults MUST be documented.
 - **FR-027**: The shared demo portfolio data and its tests MUST NOT be changed.
 - **FR-028**: There MUST be no UI changes; confirmation happens in chat text only.
-- **FR-029**: The back end to agent contract change MUST be documented in the README.
+- **FR-029**: Both contract changes MUST be documented in the README and be additive. First, the agent's response gains an optional `action` (the participant's requested change), read by the back end's agent client. Second, the history `source` gains the value `gate` for messages written by the gate, read by the shared front-end API type. Request bodies are unchanged.
 - **FR-030**: Each rule above MUST have at least one passing automated test that runs without a model server or network. This includes "skip confirmation", an expired confirmation, a reused token, a different participant trying to confirm, and a decrease below the match.
 
 ### Key Entities
@@ -227,7 +228,7 @@ fields.
 
 ## Assumptions
 
-- The gate and the per-participant store live with the agent. The back end's role is limited to passing the verified participant ID (FR-015). Where the store physically lives is a plan decision.
+- The gate and the per-participant store live in the back end, next to the verified sign-in and the existing Postgres store (plan.md, research R1). The agent only passes on what the participant asked for. The demo payroll seed is `backend/app/data/payroll.json`.
 - Participants without AI-planning access are already refused by the back end (spec 009) and never reach the gate, so the gate only needs to handle education-only mode.
 - "Confirm" and "cancel" are the only accepted replies by default. Friendlier replies ("yes", "go ahead") are deliberately not accepted, so an ambiguous reply never runs a change. The list is a setting.
 - Whole percentages only is a demo default, because typical 401(k) plans use whole-percent elections. It is a setting.
@@ -241,7 +242,7 @@ fields.
 ### Out of scope
 
 - Real recordkeeper or payroll integration (BL-061; real changes are on hold until the client decides whether contribution changes are in scope).
-- Step-up MFA itself (the step-up (extra sign-in check) method is still to be decided); only the hook in FR-012 is built.
+- Step-up authentication itself (method still to be decided); only the hook in FR-012 is built.
 - Any change to the agent's behaviour in education-only mode other than refusing actions.
 - Any change to spec 005 (`specs/005-*`).
 - Other action types (account opening, funding, transfers).
@@ -254,8 +255,8 @@ Carried over from the request; the design must hold as the POC evolves:
 
 - The gate is generic (FR-002): other actions must be able to use the same propose, check, stage, confirm, run, record flow, each with its own rule set. Build only the contribution action now.
 - The contribution source (FR-021) is one small interface (get current rate; apply a change with a confirmation token). Today it is backed by the demo seed and the store; later it is replaced by a call to Principal's systems without changing the gate.
-- Leave a clear hook where step-up authentication will be required before execution (FR-012); the step-up (extra sign-in check) method is still to be decided.
-- Resolve how the agent receives the signed-in participant's ID from the back end (FR-015, FR-016). Specs 008/009 verify it in the back end today; the agent request currently carries `prompt`, `session_id` and `education_only`. Also decide how to establish trust between the back end and the agent once the agent is hosted.
-- Decide how FR-005 is enforced in code (the confirm or cancel reply is recognised from the participant's own message, not from a model tool call), and how the agent knows the education-only marker (FR-011), using it for actions only.
+- Leave a clear hook where step-up authentication (method still to be decided) will be required before execution (FR-012).
+- Resolve how the agent receives the signed-in participant's ID from the back end (FR-015, FR-016). Specs 008/009 verify it in the back end today; the agent request currently carries `prompt`, `session_id` and `education_only`. Also decide how to establish trust between the back end and the agent once the agent is hosted. *Resolved in plan.md (research R1, R2): the gate runs in the back end, so no participant ID is sent to the agent and no new trust between the services is needed.*
+- Decide how FR-005 is enforced in code (the confirm or cancel reply is recognised from the participant's own message, not from a model tool call), and how the agent knows the education-only marker (FR-011), using it for actions only. *Resolved in plan.md (research R1, R4): confirm and cancel are recognised by the back end before the agent is called, and the back end already knows education-only mode, so the agent needs no change for it.*
 - Do not change `specs/005-*`; the spec 005 owner reviews its risk tier.
-- Reuse existing project patterns and tests (`{ok, error}` tool results, validation in code, stub-model tests); keep changes small; no UI changes. Suggested seed file: `agent/src/wealth_agent/data/payroll.json`. Do not modify `agent/src/wealth_agent/data/portfolio.json` or its tests.
+- Reuse existing project patterns and tests (`{ok, error}` tool results, validation in code, stub-model tests); keep changes small; no UI changes. Suggested seed file: `agent/src/wealth_agent/data/payroll.json` (*moved to `backend/app/data/payroll.json` by the plan, research R14*). Do not modify `agent/src/wealth_agent/data/portfolio.json` or its tests.
