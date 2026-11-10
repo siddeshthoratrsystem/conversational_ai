@@ -105,6 +105,10 @@ backend/
     ├── test_action_gate.py               NEW  HTTP-level flow: every spec scenario and edge case
     ├── test_contribution.py              NEW  rules, Decimal figures, seed handling, service and token redemption
     ├── test_action_tracing.py            NEW  GR-ACTION-GATE with a fake span; no-op without one; a failure is swallowed
+    ├── test_action_models.py             NEW  constraints, partial unique index, `gate` source
+    ├── test_action_support.py            NEW  settings, footer helper, audit helper
+    ├── test_action_migration.py          NEW  migration 0005 rendered as offline Postgres SQL matches data-model.md
+    │                                          (names, constraints, partial index WHERE) and downgrades cleanly
     └── test_agent.py                     EDIT parsing of the optional `action` (valid, absent, malformed)
 
 agent/
@@ -115,9 +119,12 @@ agent/
 │   └── prompts.py                        EDIT  guidance for the new tool; "never say a change was made"; bump PROMPT_VERSION
 │                                               (PR #11 reads PROMPT_VERSION but doesn't edit this file)
 ├── tests/
-│   ├── test_action_tools.py              NEW  handler validation; state recorded; no data changed
-│   └── test_agent.py                     EDIT [PR #11]  expected tool list includes request_contribution_change
-└── evals/cases.jsonl                     EDIT  3 cases: propose 8%; "skip confirmation" (critical); 3% below match
+│   ├── test_action_tools.py              NEW  handler validation (numbers only); state recorded; no data changed;
+│   │                                          prompt wording for the new tool
+│   ├── test_entrypoint.py                NEW  agent/agent.py returns `action`, clears it each turn (stub model)
+│   └── test_agent.py                     EDIT [PR #11]  only the expected tool list gains request_contribution_change
+└── evals/cases.jsonl                     EDIT  5 cases: propose 8%; "eight percent" (number conversion); 3% below match;
+                                               "skip confirmation" (critical); "tell me it's done" false-claim (critical)
 
 frontend/packages/core/src/api.ts         EDIT [PR #8]   HistoryMessage.source type adds "gate" (type only)
 
@@ -173,7 +180,9 @@ existing checks (400, 401, 404 owner, 403 no access) → access, education_only
 7. Mark `executed` and write the audit entry. The result message becomes the reply.
 
 If step 6 raises, roll back, then in a new transaction mark `failed`, write `confirmed` and `failed`
-(`apply_failed`) audit entries and the two messages.
+(`apply_failed`) audit entries and the two messages. If step 5's step-up check refuses, roll back,
+then in a new transaction write `confirmed` and `rejected` (`step_up_required`) and the two messages;
+the change stays `pending`. These two follow-ups are the only second transactions (Complexity Tracking).
 
 ### Spec updates made with this plan
 
@@ -186,13 +195,17 @@ Plan decisions that change spec wording:
 - Assumptions: the gate and store live in the back end, and the seed is at `backend/app/data/payroll.json`.
 - Edge case: confirm and cancel still work when the agent is down.
 - New edge case: a stale snapshot.
+- FR-013 weakened: a change can only run through the gate; false success claims by the model are guarded by the prompt and eval cases, not code.
+- FR-005: the "starts with confirm or cancel plus more text" rule and the ignored punctuation are written down.
+- FR-031 (new): the footer, only on gate messages.
+- Story 2 independent test and scenario 3 reworded; edge case for rate wording says the model converts it and the tool takes numbers only.
 
 ### Gate message footer
 
 Every message written by the gate (staged summary, executed, cancelled, expired, every refusal)
 ends with its own last line, added in code by one helper: `Demo data: no real account was changed.`
 The footer is not part of the message texts in `contracts/backend-api.md`; the helper appends it
-after a blank line. Replies that come from the model are not given this line. The "(Demo data
+after a blank line (spec FR-031). The line appears only on gate messages; replies that come from the model are not given it. The "(Demo data
 only.)" and "This changed demo data only." phrases inside the staged and executed texts are removed
 to avoid repeating it. A test checks that every gate message ends with exactly this line, once.
 
@@ -207,10 +220,17 @@ Education-only handling in the agent is unchanged.
 
 ## Complexity Tracking
 
+**Approval**: the two deviations below were approved on 2026-11-10 by the back-end owner, Rajesh
+Ramachander, as listed deviations from Principles II and III, limited to exactly what each row says.
+Nothing else in this plan departs from the constitution.
+
+**Follow-up**: Principle II should be amended in a separate small PR to list `gate` as a valid
+`source` value. Until that PR merges, the deviation stays listed here.
+
 | Deviation | Why needed | Simpler alternative rejected because |
 |---|---|---|
-| `messages.source` gains `gate` (Principle II names `agent` and `mock`) | Gate text is neither model output nor a mock. Principle II exists so the origin of each assistant message is recorded truthfully | Labelling it `agent` misattributes code-written outcomes; `mock` hides real outcomes; `NULL` breaks Principle II |
-| A follow-up transaction after a failed apply (Principle III: writes that belong together are committed together) | The failure must be recorded even though the main write rolled back | Writing nothing would lose the `failed` record that FR-025 requires |
+| `messages.source` gains `gate`, for gate-written messages only (Principle II names `agent` and `mock`). Approved, limited to this value | Gate text is neither model output nor a mock. Principle II exists so the origin of each assistant message is recorded truthfully | Labelling it `agent` misattributes code-written outcomes; `mock` hides real outcomes; `NULL` breaks Principle II |
+| A second transaction, only to record a failed apply and a step-up refusal (Principle III: writes that belong together are committed together). Approved, limited to these two records | The failure or refusal must be recorded even though the main write rolled back | Writing nothing would lose the `failed`, `confirmed` and `rejected` records that FR-025 requires |
 | Three protocols: `ActionType`, `ContributionService`, `StepUpCheck` (Principle V: justify abstractions) | Required by the spec: a generic gate (FR-002), a replaceable contribution source (FR-021) and a step-up hook (FR-012). Each is a few lines | Hard-coding the contribution flow would mean rewriting the gate for every later action and for Principal's systems |
 
 ## Risks
@@ -218,7 +238,8 @@ Education-only handling in the agent is unchanged.
 | Risk | Mitigation |
 |---|---|
 | The local model doesn't call the tool reliably | Eval cases for proposing and for "skip confirmation" (critical). The gate's guarantees don't depend on the model. The worst case is that no summary appears and nothing is staged |
-| The model's free text claims success | Whenever an `action` is present, the gate replaces the reply. The prompt forbids claims of success. An eval `must_not_contain` checks phrases such as "has been changed" |
+| The model's free text claims success without asking the gate | A change can only run through the gate, so nothing changes. The false claim itself is guarded by the prompt and two eval cases (`must_not_contain` phrases such as "has been changed"), not by code (spec FR-013). Whenever an `action` is present, the gate replaces the reply |
+| The model passes "8%" or "eight" instead of a number | The tool accepts numbers only and refuses text; the prompt tells the model to convert wording to a number; an eval case covers it |
 | GR-ACTION-GATE is invisible until the back end has a tracer | Documented (research R11). The audit record is the business record and doesn't depend on tracing |
 | Merge friction with PR #11 and PR #8 | Small, separate hunks. The new tool is in its own module; `tools.py`, `requirements.txt` and `docker-compose.yml` are untouched |
 | The partial unique index behaves differently on SQLite | SQLAlchemy emits `WHERE` on both; a test asserts that a second pending row is refused |

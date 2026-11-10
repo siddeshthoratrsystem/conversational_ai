@@ -52,7 +52,7 @@ Indexes:
 ```
 
 - `confirmed` only lasts within one transaction: it ends that same transaction as `executed`,
-  rolls back to `pending`, or becomes `failed` in the follow-up transaction (research R6, R13).
+  rolls back to `pending` (step-up refusal), or becomes `failed` in the follow-up transaction (research R6, R13).
 - `executed`, `cancelled`, `expired` and `failed` are final.
 - The participant's current rate is re-checked at confirm time. If it changed since staging, which
   is impossible today but possible with a real recordkeeper, the change is refused (`stale`) and
@@ -81,6 +81,7 @@ There is no chat text, no rate, no salary and no name (FR-025). The app only ins
 | Invalid proposal | `proposed`, `rejected` (reason) |
 | Confirm | `confirmed`, `executed` |
 | Confirm, apply fails | `confirmed` and `failed` (follow-up transaction, research R6) |
+| Confirm, step-up refuses | `confirmed` and `rejected` (`step_up_required`) (follow-up transaction, research R13); the change stays pending |
 | Cancel | `cancelled` (`participant_cancelled`) |
 | Expiry noticed | `expired` |
 | Refused confirm or cancel | `rejected` (reason) |

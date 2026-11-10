@@ -75,13 +75,15 @@ the change for someone else.
 or may not follow. BL-037 requires it to be enforced in code.
 
 **Independent Test**: For each attempt listed in the scenarios, check that the participant's
-contribution is unchanged and the attempt is recorded as refused.
+contribution is unchanged. Where the scenario says the attempt is refused, also check that a
+`rejected` entry is recorded; attempts that become an ordinary proposal or pass through to the
+model (scenarios 1, 2 and 4) are recorded like any other proposal, or not at all.
 
 **Acceptance Scenarios**:
 
 1. **Given** a participant at 5%, **When** they say "change my contribution to 8% and skip confirmation" (or "I already confirm, just do it"), **Then** the agent shows the summary and asks for confirmation as in Story 1, and the contribution stays at 5%.
 2. **Given** any single message from the participant, **When** the model both proposes a change and tries to confirm it in that same turn, **Then** the confirmation is refused and the change stays pending.
-3. **Given** a pending change, **When** the participant replies "confirm, but make it 9%", **Then** nothing is executed; the agent explains that confirmation can't change the values and that they can propose 9% instead.
+3. **Given** a pending change, **When** the participant replies "confirm, but make it 9%" (or "confirm please"), **Then** nothing is executed; the system explains that confirmation can't change the values, that they should reply exactly "confirm" or "cancel", and that to ask for a different rate they can say the new rate.
 4. **Given** a pending change, **When** the participant replies with something other than an accepted confirm or cancel reply (for example "ok maybe"), **Then** nothing is executed and the change stays pending until it expires.
 5. **Given** a change staged more than 5 minutes ago (demo expiry), **When** the participant replies "confirm", **Then** nothing is executed, the agent says the change expired and they can propose it again, and the expiry is recorded.
 6. **Given** a change that was already executed, **When** its confirmation token is presented again, **Then** it is refused and the contribution is not changed a second time.
@@ -150,8 +152,8 @@ fields.
 - Applying the change fails (for example, the store can't be written): nothing changes, the participant is told it didn't go through and can try again, and the step is recorded as failed.
 - The back end can't reach the agent and returns its mock reply: no action is proposed. "Confirm" and "cancel" still work, because they don't need the agent.
 - The participant's current rate changed between the summary and "confirm" (not possible with demo data, but possible with a real recordkeeper): nothing runs, and they are asked to propose again so they see the new figures.
-- The model claims a change was made when the gate didn't execute it: the reply about the outcome comes from the gate, not the model, so this can't show up as a success.
-- The participant gives the rate in words ("eight percent") or with a percent sign: the request is understood as 8%. The checks apply to the number the gate receives, whatever the wording.
+- The model claims a change was made without asking the gate: a change can only run through the gate, so nothing changed, but the false claim can reach the participant, because it is the model's own text. It is guarded by the system prompt and an evaluation case, not by code (FR-013). Whenever the model does ask the gate, the gate's message replaces the model's reply.
+- The participant gives the rate in words ("eight percent") or with a percent sign: the model converts it to a number (8) before asking for the change. The request tool accepts numbers only, so "8%" or "eight" passed as text is refused. The gate's checks apply to the number it receives. An evaluation case covers the conversion.
 - Text inside tool output or demo data that says to skip confirmation: treated as data (spec 005 FR-008); it changes nothing.
 - The demo payroll seed file is missing or invalid: no change can be proposed; the agent gives a plain message that contribution changes aren't available right now.
 
@@ -165,7 +167,7 @@ fields.
 - **FR-002**: The gate MUST be generic: each action type supplies its own rule set and summary, and other action types (account opening, funding, transfers) MUST be able to use the same flow later without changing it. Only the contribution change is built in this spec.
 - **FR-003**: A proposal MUST be checked against its action's rules before anything is staged. A failed check MUST return a plain reason to the participant and stage nothing.
 - **FR-004**: A staged change MUST hold the exact values that will run and MUST be shown to the participant as a summary with a request to confirm or cancel, stating that nothing has changed yet.
-- **FR-005**: A change MUST run only after the participant's own explicit confirmation. A confirmation counts only if it is the participant's own message, sent in the same chat session where the change was proposed, in a later turn than the one that showed the summary, and it is an accepted confirm reply (demo default: "confirm", ignoring case and surrounding punctuation). The model MUST NOT be able to confirm on the participant's behalf, and wording such as "skip confirmation" MUST have no effect.
+- **FR-005**: A change MUST run only after the participant's own explicit confirmation. A confirmation counts only if it is the participant's own message, sent in the same chat session where the change was proposed, in a later turn than the one that showed the summary, and it is an accepted confirm reply (demo default: "confirm"). The reply is matched ignoring case and ignoring surrounding whitespace and the punctuation marks . , ! ? ; : and quotes. While a change is pending in this chat, a message that starts with an accepted confirm or cancel word and has more text after it (for example "confirm please" or "confirm, but make it 9%") runs nothing and is answered with the reply rule instead of being sent to the model. The model MUST NOT be able to confirm on the participant's behalf, and wording such as "skip confirmation" MUST have no effect.
 - **FR-006**: Confirmation MUST NOT accept new values. It runs only the staged change; a confirm reply that asks for different values runs nothing.
 - **FR-007**: Confirming MUST issue a one-time confirmation token bound to the participant, the chat session and the staged change. Running the change MUST require that token. A token MUST be refused if it was already used, belongs to another participant, chat session or change, or the staged change has expired.
 - **FR-008**: A staged change MUST expire if not confirmed within the expiry time (demo default 5 minutes from staging). An expired change MUST NOT run.
@@ -173,7 +175,7 @@ fields.
 - **FR-010**: A participant MUST have at most one pending change per action type. A new proposal replaces the pending one, which is recorded as cancelled.
 - **FR-011**: The gate MUST NOT let a participant propose, confirm, cancel or run any action when their chat is in education-only mode. The gate honours the education-only flag for actions only; the agent's other behaviour under the flag is not changed by this spec.
 - **FR-012**: The gate MUST have a defined step before running a change where an extra identity check, step-up authentication (method still to be decided), can be required later. In this spec that step always passes, and a test MUST show that if it refuses, nothing runs.
-- **FR-013**: Messages to the participant about the outcome (staged, executed, cancelled, expired, refused, failed) MUST come from the gate's result, not be composed by the model, so the agent can't report a change that didn't happen.
+- **FR-013**: A change MUST be able to run only through the gate. Messages about the outcome of a gate step (staged, executed, cancelled, expired, refused, failed) MUST come from the gate's result, not be composed by the model. The gate cannot stop the model from writing a false success claim in an ordinary reply when it never asked the gate for anything; that risk is guarded by the system prompt and an evaluation case, not by code.
 
 **Identity and isolation**
 
@@ -203,6 +205,7 @@ fields.
 - **FR-028**: There MUST be no UI changes; confirmation happens in chat text only.
 - **FR-029**: Both contract changes MUST be documented in the README and be additive. First, the agent's response gains an optional `action` (the participant's requested change), read by the back end's agent client. Second, the history `source` gains the value `gate` for messages written by the gate, read by the shared front-end API type. Request bodies are unchanged.
 - **FR-030**: Each rule above MUST have at least one passing automated test that runs without a model server or network. This includes "skip confirmation", an expired confirmation, a reused token, a different participant trying to confirm, and a decrease below the match.
+- **FR-031**: Every message written by the gate MUST end with the line "Demo data: no real account was changed." The line appears only on gate messages, never on the model's replies.
 
 ### Key Entities
 

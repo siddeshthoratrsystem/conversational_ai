@@ -207,7 +207,7 @@ It runs after the token is issued and before `apply_change` redeems it. It is pr
 `get_step_up_check`, which returns `AlwaysPass` today. Tests override the dependency with a
 refusing check, the same way `get_verifier` is overridden in `conftest.py`. If the check refuses,
 the confirm transaction rolls back, so nothing is run or used up. The change stays pending until it
-expires. A `rejected` entry with reason `step_up_required` is written in a follow-up transaction,
+expires. A `confirmed` entry and a `rejected` entry with reason `step_up_required` are written in a follow-up transaction (the participant did confirm, so the confirmation is still recorded),
 the same shape as the failure path in R6.
 
 ## R14. Demo payroll seed location
