@@ -1,9 +1,10 @@
 import logging
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
+from app import agent as agent_module
 from app import main, models
 from app.agent import AgentError, AgentReply
 
@@ -53,7 +54,7 @@ def test_agent_reply_is_stored_with_source_agent(client, monkeypatch):
     monkeypatch.setattr(
         main,
         "call_agent",
-        lambda url, sid, msg: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
+        lambda url, sid, msg, **kwargs: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
     )
 
     r = post_chat(client, message="I need a quote")
@@ -143,7 +144,7 @@ def test_chat_response_message_id_is_the_agent_assistant_message(client, engine,
     monkeypatch.setattr(
         main,
         "call_agent",
-        lambda url, sid, msg: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
+        lambda url, sid, msg, **kwargs: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
     )
 
     r = post_chat(client, message="I need a quote")
@@ -165,3 +166,98 @@ def test_each_turn_returns_a_different_message_id(client):
     second = post_chat(client, message="two").json()["message_id"]
 
     assert first != second
+
+
+# --- spec 011: the back end is a pass-through that forwards the token -------------------------
+
+
+def test_the_session_row_is_committed_before_the_agent_is_called(client, engine, monkeypatch):
+    monkeypatch.setenv("AGENT_URL", "http://agent.test/invocations")
+    commits = []
+    event.listen(engine, "commit", lambda conn: commits.append(1))
+    seen = {}
+
+    def fake(url, sid, msg, **kwargs):
+        seen["commits"] = len(commits)
+        with Session(engine) as other:  # a separate session, as another process would be
+            seen["row"] = other.get(models.Session, sid)
+        return AgentReply(reply="ok", intent=None, latency_ms=1)
+
+    monkeypatch.setattr(main, "call_agent", fake)
+    assert post_chat(client).status_code == 200
+
+    assert seen["commits"] >= 1
+    assert seen["row"] is not None and seen["row"].user_id == "alice"
+
+
+def test_the_participants_token_is_forwarded_unchanged_and_never_logged(client, monkeypatch, caplog):
+    monkeypatch.setenv("AGENT_URL", "http://agent.test/invocations")
+    tokens = []
+
+    def fake(url, sid, msg, **kwargs):
+        tokens.append(kwargs.get("token"))
+        return AgentReply(reply="ok", intent=None, latency_ms=1)
+
+    monkeypatch.setattr(main, "call_agent", fake)
+    sent = client.headers["Authorization"].removeprefix("Bearer ")
+    with caplog.at_level(logging.DEBUG):
+        assert post_chat(client).status_code == 200
+
+    assert tokens == [sent]
+    assert sent not in caplog.text
+
+
+def test_a_gate_reply_is_stored_and_returned_as_gate(client, monkeypatch):
+    monkeypatch.setenv("AGENT_URL", "http://agent.test/invocations")
+    monkeypatch.setattr(
+        main,
+        "call_agent",
+        lambda url, sid, msg, **kwargs: AgentReply(reply="Summary", intent=None, latency_ms=3, source="gate"),
+    )
+    r = post_chat(client, message="change it to 8%")
+
+    assert r.json()["reply"] == "Summary"
+    assistant = client.get("/api/chat/s1/history").json()["messages"][1]
+    assert assistant["source"] == "gate"
+
+
+def test_a_malformed_source_is_stored_as_agent(client, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("AGENT_URL", "http://agent.test/invocations")
+    real_client = httpx.Client
+    body = {"reply": "ok", "intent": None, "source": "bogus"}
+    monkeypatch.setattr(
+        agent_module.httpx,
+        "Client",
+        lambda **kw: real_client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)), **kw),
+    )
+    assert post_chat(client).status_code == 200
+    assert client.get("/api/chat/s1/history").json()["messages"][1]["source"] == "agent"
+
+
+def test_the_mock_fallback_is_unchanged(client):
+    r = post_chat(client, message="hi")
+    assert r.json()["reply"] == "(mock) You said: hi"
+    assert client.get("/api/chat/s1/history").json()["messages"][1]["source"] == "mock"
+
+
+def test_a_failed_message_write_leaves_an_empty_hidden_session(client, engine, monkeypatch):
+    monkeypatch.setenv("AGENT_URL", "http://agent.test/invocations")
+    monkeypatch.setattr(
+        main, "call_agent", lambda url, sid, msg, **kw: AgentReply(reply="ok", intent=None, latency_ms=1)
+    )
+
+    def fail_on_message_insert(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("INSERT INTO MESSAGES"):
+            raise RuntimeError("disk full")
+
+    event.listen(engine, "before_cursor_execute", fail_on_message_insert)
+    with pytest.raises(Exception):
+        post_chat(client)
+    event.remove(engine, "before_cursor_execute", fail_on_message_insert)
+
+    with Session(engine) as db:
+        assert db.get(models.Session, "s1") is not None
+        assert db.scalars(select(models.Message)).all() == []
+    assert client.get("/api/sessions?ids=s1").json() == {"sessions": []}

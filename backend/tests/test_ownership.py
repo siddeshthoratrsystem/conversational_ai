@@ -160,26 +160,37 @@ def test_ownership_refusals_are_logged_with_the_case(client, bob, caplog):
 
 
 def test_two_users_racing_for_one_new_session_id(client, bob, engine, monkeypatch):
-    """Bob's chat is stored while alice's agent call is in flight; alice's write must lose."""
-    monkeypatch.setenv("AGENT_URL", "http://agent.invalid/invocations")
+    """Bob creates the chat between alice's owner check and her insert; only one user can own it.
 
-    def slow_agent(url, session_id, message):
-        with Session(engine) as db:  # bob's chat is stored while alice's agent call is in flight
-            db.add(models.Session(id=session_id, user_id="bob"))
-            db.flush()
-            db.add(models.Message(session_id=session_id, role="user", content="bobs first"))
-            db.commit()
+    The race is now at session creation, before the agent call: alice gets 404 and the agent is
+    not called for her (research R20).
+    """
+    monkeypatch.setenv("AGENT_URL", "http://agent.invalid/invocations")
+    calls = []
+
+    def agent_spy(url, session_id, message, **kwargs):
+        calls.append(session_id)
         return AgentReply(reply="agent says hi", intent=None, latency_ms=5)
 
-    monkeypatch.setattr(main, "call_agent", slow_agent)
+    monkeypatch.setattr(main, "call_agent", agent_spy)
+
+    real_check = main._check_owner
+    state = {"calls": 0}
+
+    def check_then_lose_the_race(db, session_id, user_id):
+        found = real_check(db, session_id, user_id)
+        state["calls"] += 1
+        if not found and state["calls"] == 2:  # the check made while creating the session row
+            with Session(engine) as other:  # bob's chat is stored right after alice's check
+                other.add(models.Session(id=session_id, user_id="bob"))
+                other.commit()
+        return found
+
+    monkeypatch.setattr(main, "_check_owner", check_then_lose_the_race)
     r = chat(client, "race", "alices first")
 
     assert r.status_code == 404
     assert r.json() == NOT_FOUND_SESSION
     assert owner_of(engine, "race") == "bob"
-    with Session(engine) as db:
-        contents = [
-            m.content
-            for m in db.scalars(select(models.Message).where(models.Message.session_id == "race"))
-        ]
-    assert contents == ["bobs first"]
+    assert calls == []
+    assert message_count(engine) == 0

@@ -6,6 +6,9 @@ dependencies = [
     "bedrock-agentcore",
     "strands-agents[ollama]==1.63.0",
     "ollama==0.6.3",
+    "sqlalchemy>=2,<3",
+    "psycopg[binary]>=3,<4",
+    "pyjwt[crypto]>=2.10,<3",
 ]
 
 [dependency-groups]

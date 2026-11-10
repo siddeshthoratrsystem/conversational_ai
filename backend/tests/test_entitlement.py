@@ -36,7 +36,7 @@ def agent_calls(monkeypatch):
     """Answer through a fake agent and record how it was called."""
     calls = []
 
-    def fake_call_agent(url, session_id, message, education_only=False):
+    def fake_call_agent(url, session_id, message, education_only=False, **kwargs):
         calls.append({"session_id": session_id, "education_only": education_only})
         return AgentReply(reply="agent reply", intent=None, latency_ms=5)
 

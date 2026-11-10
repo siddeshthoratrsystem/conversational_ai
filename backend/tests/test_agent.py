@@ -21,7 +21,8 @@ def mock_agent(monkeypatch):
     return install
 
 
-def test_success_sends_prompt_and_session_with_10s_timeout(mock_agent):
+def test_success_sends_prompt_and_session_with_the_default_timeout(mock_agent, monkeypatch):
+    monkeypatch.delenv("AGENT_TIMEOUT_SECONDS", raising=False)
     requests = []
 
     def handler(request):
@@ -32,7 +33,7 @@ def test_success_sends_prompt_and_session_with_10s_timeout(mock_agent):
     result = agent.call_agent("http://agent/invocations", "s1", "hello")
 
     assert (result.reply, result.intent) == ("Hi!", "greeting")
-    assert seen["timeout"] == 10
+    assert seen["timeout"] == 60
     assert requests[0].read() == b'{"prompt":"hello","session_id":"s1"}'
 
 
@@ -62,49 +63,46 @@ def test_timeout_raises_agent_error(mock_agent):
         agent.call_agent("http://agent/invocations", "s1", "hello")
 
 
-# --- spec 011: the optional `action` in the agent's response ---------------------------------
-
-ACTION = {"type": "contribution_change", "params": {"new_rate_pct": 8}}
-
-
-def test_action_is_returned_when_valid(mock_agent):
-    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "action": ACTION}))
-    result = agent.call_agent("http://agent/invocations", "s1", "change it to 8%")
-    assert result.action == ACTION
+def test_timeout_comes_from_the_environment(mock_agent, monkeypatch):
+    monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", "42")
+    seen = mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None}))
+    agent.call_agent("http://agent/invocations", "s1", "hi")
+    assert seen["timeout"] == 42
 
 
-@pytest.mark.parametrize(
-    "body",
-    [{"reply": "ok", "intent": None}, {"reply": "ok", "intent": None, "action": None}],
-    ids=["absent", "null"],
-)
-def test_action_is_none_when_absent_or_null(mock_agent, body):
-    mock_agent(lambda r: httpx.Response(200, json=body))
-    assert agent.call_agent("http://agent/invocations", "s1", "hi").action is None
+def test_default_agent_timeout_is_60_seconds(monkeypatch):
+    monkeypatch.delenv("AGENT_TIMEOUT_SECONDS", raising=False)
+    assert agent.agent_timeout_seconds() == 60
 
 
-@pytest.mark.parametrize(
-    "bad_action",
-    [
-        "contribution_change",
-        ["contribution_change"],
-        {"type": 5, "params": {}},
-        {"type": "contribution_change", "params": "8"},
-        {"type": "contribution_change"},
-        {"params": {"new_rate_pct": 8}},
-    ],
-    ids=["string", "list", "type-not-string", "params-not-object", "no-params", "no-type"],
-)
-def test_malformed_action_is_ignored_with_a_warning_and_reply_is_kept(mock_agent, caplog, bad_action):
-    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "action": bad_action}))
+@pytest.mark.parametrize("value", ["", "abc", "0", "-5"])
+def test_unusable_timeout_values_fall_back_to_the_default_with_a_warning(monkeypatch, caplog, value):
+    monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", value)
     with caplog.at_level("WARNING", logger="app.agent"):
-        result = agent.call_agent("http://agent/invocations", "s1", "hi")
-    assert result.reply == "ok"
-    assert result.action is None
-    assert any("action" in rec.message for rec in caplog.records)
+        assert agent.agent_timeout_seconds() == 60
+    if value:
+        assert any("AGENT_TIMEOUT_SECONDS" in r.getMessage() for r in caplog.records)
 
 
-def test_request_body_is_unchanged_by_the_action_field(mock_agent):
+def test_start_up_logs_the_timeout_in_use(monkeypatch, caplog):
+    monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", "45")
+    with caplog.at_level("INFO", logger="app.agent"):
+        agent.log_timeout_at_start_up()
+    lines = [r.getMessage() for r in caplog.records if "AGENT_TIMEOUT_SECONDS" in r.getMessage()]
+    assert len(lines) == 1 and "45" in lines[0]
+
+
+def test_start_up_logs_the_default_timeout(monkeypatch, caplog):
+    monkeypatch.delenv("AGENT_TIMEOUT_SECONDS", raising=False)
+    with caplog.at_level("INFO", logger="app.agent"):
+        agent.log_timeout_at_start_up()
+    assert any("AGENT_TIMEOUT_SECONDS" in r.getMessage() and "60" in r.getMessage() for r in caplog.records)
+
+
+# --- spec 011: the participant's token is forwarded, and `source` comes back -----------------
+
+
+def test_token_is_sent_as_a_bearer_header(mock_agent):
     requests = []
 
     def handler(request):
@@ -112,5 +110,53 @@ def test_request_body_is_unchanged_by_the_action_field(mock_agent):
         return httpx.Response(200, json={"reply": "ok", "intent": None})
 
     mock_agent(handler)
-    agent.call_agent("http://agent/invocations", "s1", "hello")
-    assert requests[0].read() == b'{"prompt":"hello","session_id":"s1"}'
+    agent.call_agent("http://agent/invocations", "s1", "hi", token="t")
+    assert requests[0].headers["Authorization"] == "Bearer t"
+    assert requests[0].read() == b'{"prompt":"hi","session_id":"s1"}'
+
+
+def test_no_authorization_header_without_a_token(mock_agent):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"reply": "ok", "intent": None})
+
+    mock_agent(handler)
+    agent.call_agent("http://agent/invocations", "s1", "hi", token=None)
+    agent.call_agent("http://agent/invocations", "s1", "hi")
+    assert all("authorization" not in r.headers for r in requests)
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ({"reply": "ok", "intent": None, "source": "gate"}, "gate"),
+        ({"reply": "ok", "intent": None}, None),
+        ({"reply": "ok", "intent": None, "source": None}, None),
+    ],
+    ids=["gate", "absent", "null"],
+)
+def test_source_is_gate_or_none(mock_agent, body, expected):
+    mock_agent(lambda r: httpx.Response(200, json=body))
+    assert agent.call_agent("http://agent/invocations", "s1", "hi").source == expected
+
+
+@pytest.mark.parametrize("bad", ["agent", "mock", "other", 5, ["gate"], {"gate": 1}])
+def test_any_other_source_is_ignored_with_a_warning_and_the_reply_is_kept(mock_agent, caplog, bad):
+    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "source": bad}))
+    with caplog.at_level("WARNING", logger="app.agent"):
+        result = agent.call_agent("http://agent/invocations", "s1", "hi")
+    assert result.reply == "ok"
+    assert result.source is None
+    assert any("source" in r.getMessage() for r in caplog.records)
+
+
+def test_the_token_never_appears_in_logs(mock_agent, caplog):
+    mock_agent(lambda r: httpx.Response(200, json={"reply": "ok", "intent": None, "source": "weird"}))
+    with caplog.at_level("DEBUG"):
+        agent.call_agent("http://agent/invocations", "s1", "hi", token="SECRET-TOKEN-123")
+        mock_agent(lambda r: httpx.Response(500))
+        with pytest.raises(agent.AgentError):
+            agent.call_agent("http://agent/invocations", "s1", "hi", token="SECRET-TOKEN-123")
+    assert "SECRET-TOKEN-123" not in caplog.text

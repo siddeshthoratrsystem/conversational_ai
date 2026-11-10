@@ -147,7 +147,7 @@ class ActionAudit(Base):
     __tablename__ = "action_audit"
     __table_args__ = (
         CheckConstraint(
-            "step IN ('proposed', 'rejected', 'staged', 'confirmed', 'cancelled', 'expired', "
+            "step IN ('rejected', 'staged', 'confirmed', 'cancelled', 'expired', "
             "'executed', 'failed')",
             name="ck_action_audit_step",
         ),

@@ -77,7 +77,7 @@ def test_creates_each_table(upgrade_sql, table):
         "step TEXT NOT NULL",
         "reason TEXT",
         "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
-        "CONSTRAINT ck_action_audit_step CHECK (step IN ('proposed', 'rejected', 'staged', "
+        "CONSTRAINT ck_action_audit_step CHECK (step IN ('rejected', 'staged', "
         "'confirmed', 'cancelled', 'expired', 'executed', 'failed'))",
         "CONSTRAINT fk_action_audit_pending_action_id FOREIGN KEY(pending_action_id) "
         "REFERENCES pending_actions (id)",

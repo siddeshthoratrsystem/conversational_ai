@@ -140,7 +140,7 @@ def test_feedback_on_an_agent_reply_is_accepted(client, engine, monkeypatch):
     monkeypatch.setattr(
         main,
         "call_agent",
-        lambda url, sid, msg: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
+        lambda url, sid, msg, **kwargs: AgentReply(reply="Sure!", intent="get_quote", latency_ms=42),
     )
     message_id = send_chat(client)
 

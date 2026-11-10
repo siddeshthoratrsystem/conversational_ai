@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -62,7 +63,7 @@ def test_pending_action_rejects_unknown_status(engine):
             db.commit()
 
 
-STEPS = ["proposed", "rejected", "staged", "confirmed", "cancelled", "expired", "executed", "failed"]
+STEPS = ["rejected", "staged", "confirmed", "cancelled", "expired", "executed", "failed"]
 
 
 @pytest.mark.parametrize("step", STEPS)
@@ -70,6 +71,20 @@ def test_audit_accepts_each_step(engine, step):
     with Session(engine) as db:
         db.add(models.ActionAudit(user_id="alice", action_type="contribution_change", step=step))
         db.commit()
+
+
+def test_audit_refuses_the_removed_proposed_step(engine):
+    with Session(engine) as db:
+        db.add(models.ActionAudit(user_id="alice", action_type="contribution_change", step="proposed"))
+        with pytest.raises(IntegrityError):
+            db.commit()
+
+
+def test_audit_accepts_a_rejected_row_without_a_pending_change(engine):
+    with Session(engine) as db:
+        db.add(models.ActionAudit(user_id="alice", action_type="contribution_change", step="rejected", reason="out_of_range"))
+        db.commit()
+        assert db.scalars(select(models.ActionAudit)).one().pending_action_id is None
 
 
 def test_audit_rejects_unknown_step(engine):
@@ -81,7 +96,7 @@ def test_audit_rejects_unknown_step(engine):
 
 def test_audit_gets_a_time_by_default(engine):
     with Session(engine) as db:
-        row = models.ActionAudit(user_id="alice", action_type="contribution_change", step="proposed")
+        row = models.ActionAudit(user_id="alice", action_type="contribution_change", step="staged")
         db.add(row)
         db.commit()
         assert row.created_at is not None

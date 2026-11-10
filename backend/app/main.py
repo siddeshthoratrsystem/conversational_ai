@@ -2,8 +2,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from collections.abc import Callable
-from functools import partial
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -13,11 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from app import feedback, models
-from app.actions import contribution
-from app.actions.gate import ActionGate, GateResult, load_settings
 from app import auth
-from app.auth import current_user, verified_claims
-from app.agent import AgentError, call_agent
+from app.auth import current_user, verified_claims, verified_token
+from app.agent import AgentError, call_agent, log_timeout_at_start_up
 from app.entitlement import check_access
 from app.db import get_db
 
@@ -27,6 +23,7 @@ logger = logging.getLogger("app.chat")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     auth.load_settings()  # refuse to start, naming the setting, if the sign-in check isn't configured
+    log_timeout_at_start_up()  # which AGENT_TIMEOUT_SECONDS this process uses (spec 011)
     yield
 
 
@@ -94,7 +91,7 @@ def health():
     return {"status": "ok"}
 
 
-def _reply_for(session_id: str, message: str, education_only: bool = False) -> dict:
+def _reply_for(session_id: str, message: str, education_only: bool = False, token: str | None = None) -> dict:
     """Ask the agent; fall back to the mock reply (and log why) if it is unset or fails."""
     agent_url = os.getenv("AGENT_URL")  # full URL, e.g. http://localhost:8080/invocations
     if not agent_url:
@@ -103,13 +100,13 @@ def _reply_for(session_id: str, message: str, education_only: bool = False) -> d
         try:
             # Pass the flag only when set, so the agent call is unchanged otherwise.
             extra = {"education_only": True} if education_only else {}
-            result = call_agent(agent_url, session_id, message, **extra)
+            result = call_agent(agent_url, session_id, message, token=token, **extra)
             return {
                 "reply": result.reply,
                 "intent": result.intent,
                 "latency_ms": result.latency_ms,
-                "source": "agent",
-                "action": result.action,
+                # Spec 011: "gate" when the agent wrote the text in code; anything else is "agent".
+                "source": "gate" if result.source == "gate" else "agent",
             }
         except AgentError as e:
             logger.warning(
@@ -120,7 +117,6 @@ def _reply_for(session_id: str, message: str, education_only: bool = False) -> d
         "intent": None,
         "latency_ms": None,
         "source": "mock",
-        "action": None,
     }
 
 
@@ -148,11 +144,34 @@ def _check_owner(db: DbSession, session_id: str, user_id: str) -> bool:
     return True
 
 
-def get_action_gate(
-    db: DbSession = Depends(get_db),
-    contributions=Depends(contribution.get_contribution_service),
-) -> ActionGate:
-    return ActionGate(db, load_settings(), contributions)
+def _ensure_session(db: DbSession, session_id: str, user_id: str, access: str) -> None:
+    """Make sure the caller's chat row exists and is committed before the agent is called (spec 011).
+
+    The agent's gate has a foreign key to the session, so the row must exist first. A chat that is
+    someone else's or nobody's is the usual 404. If another request creates the same new id at the
+    same moment, retry once; the retry sees the other owner and answers 404 (research R20).
+    """
+    for attempt in (1, 2):
+        try:
+            if _check_owner(db, session_id, user_id):
+                return
+            db.add(
+                models.Session(
+                    id=session_id,
+                    user_id=user_id,
+                    access=access,
+                    access_checked_at=datetime.now(timezone.utc),
+                )
+            )
+            db.commit()
+            return
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND) from None
+        except HTTPException:
+            db.rollback()
+            raise
 
 
 def _persist(
@@ -162,12 +181,9 @@ def _persist(
     message: str,
     result: dict,
     access: str,
-    gate_step: Callable[[], GateResult] | None = None,
 ) -> int:
     """Store the session (if new) plus the user and assistant messages in one transaction, and
     record this turn's access result on the session (spec 009).
-
-    A gate step, when given, runs after the session row exists and supplies the reply.
 
     A new session is owned by the caller. If another user's session turned up meanwhile, the
     answer is the same 404 and nothing is stored. Returns the id of the assistant message.
@@ -183,12 +199,6 @@ def _persist(
             else:
                 session = db.get(models.Session, session_id)
                 session.access, session.access_checked_at = access, checked_at
-            if gate_step is not None:
-                # Spec 011: the gate's state, audit rows and reply are written in this same
-                # transaction. Its text replaces the model's (FR-013).
-                # `result` is updated in place so the caller returns the same text.
-                outcome = gate_step()
-                result.update(reply=outcome.reply_text, intent=None, latency_ms=None, source="gate")
             db.add(models.Message(session_id=session_id, role="user", content=message))
             assistant = models.Message(
                 session_id=session_id,
@@ -226,17 +236,16 @@ def chat(
     req: ChatRequest,
     user_id: str = Depends(current_user),
     claims: dict[str, Any] = Depends(verified_claims),
+    token: str = Depends(verified_token),
     db: DbSession = Depends(get_db),
-    gate: ActionGate = Depends(get_action_gate),
 ):
     if not req.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id must not be empty")
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
 
-    # Someone else's (or nobody's) session is a 404 before the agent is called or anything stored.
+    # Someone else's (or nobody's) session is a 404 before anything else happens.
     _check_owner(db, req.session_id, user_id)
-    db.rollback()  # end the read transaction so no connection is held during the agent call
 
     # Spec 009: no AI planning without access; education only when access can't be decided.
     access = check_access(claims)
@@ -245,21 +254,16 @@ def chat(
         raise HTTPException(status_code=403, detail="AI planning is not available for this account")
     education_only = access == "unavailable"
 
+    # A new chat's row is committed now, so the agent's gate can refer to it (spec 011). The owner
+    # is checked again here, because another request may have created the same id meanwhile.
+    _ensure_session(db, req.session_id, user_id, access)
+    db.rollback()  # end the read transaction so no connection is held during the agent call
+
     # The agent is called before writing so no transaction is held open during the HTTP call;
-    # both messages are still written and committed together afterwards.
-    # Spec 011: the participant's own "confirm" or "cancel" is handled here and never reaches the
-    # model. (Education-only handling of actions comes with the next user story: until then the
-    # gate does nothing in that mode, so no action can be staged or run.)
-    gate_step = None
-    kind = None if education_only else gate.classify_reply(req.message)
-    if kind is not None:
-        result = {"reply": "", "intent": None, "latency_ms": None, "source": "gate"}
-        gate_step = partial(gate.handle_reply, user_id, req.session_id, kind)
-    else:
-        result = _reply_for(req.session_id, req.message, education_only)
-        if result["action"] and not education_only:
-            gate_step = partial(gate.handle_proposal, user_id, req.session_id, result["action"])
-    message_id = _persist(db, req.session_id, user_id, req.message, result, access, gate_step)
+    # both messages are still written and committed together afterwards. The participant's own
+    # token goes with the call: the agent verifies it and runs the action gate (spec 011).
+    result = _reply_for(req.session_id, req.message, education_only, token)
+    message_id = _persist(db, req.session_id, user_id, req.message, result, access)
     extra = {"education_only": True} if education_only else {}
     return ChatResponse(
         session_id=req.session_id,

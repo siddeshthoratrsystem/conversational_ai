@@ -132,6 +132,14 @@ def verified_claims(request: Request, verifier: Verifier = Depends(get_verifier)
     return claims
 
 
+def verified_token(request: Request, _claims: dict[str, Any] = Depends(verified_claims)) -> str:
+    """FastAPI dependency: the raw bearer token, once `verified_claims` has accepted it.
+
+    It is forwarded to the agent so the agent can verify it itself (spec 011). Never log it.
+    """
+    return _bearer_token(request)
+
+
 def current_user(claims: dict[str, Any] = Depends(verified_claims)) -> str:
     """FastAPI dependency: the verified token's subject."""
     return claims["sub"]

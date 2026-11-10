@@ -35,10 +35,10 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
 
 ## Phase 1: Setup
 
-- [ ] T001 Run `cd backend && pytest`, `cd agent && pytest` and `cd frontend && npm test` on the current working tree (revision 1 US1 uncommitted) and note the result as the baseline (paths: `backend/tests/`, `agent/tests/`, `frontend/`)
-- [ ] T002 Amend `.specify/memory/constitution.md` with `/speckit-constitution`. In Principle II, the `source` rule becomes "`agent`, `mock` or `gate`", and "Outbound agent calls MUST have an explicit timeout (currently 10s)" becomes "configurable through `AGENT_TIMEOUT_SECONDS`, default 60 seconds". Bump the version to 1.1.0 (MINOR), set Last Amended, and record the rationale (spec 011, plan.md Complexity Tracking row 1). Commit this file alone, as its own commit, before any implementation commit; stage only this file
-- [ ] T003 [P] Add `sqlalchemy>=2,<3`, `psycopg[binary]>=3,<4` and `pyjwt[crypto]>=2.10,<3` to `agent/requirements.txt` and `agent/pyproject.toml` [PR #11] (research R22), then reinstall the agent's virtual environment
-- [ ] T004 [P] Revise the gate block in `.env.example` [PR #8] (research R16): remove `CONTRIBUTION_WHOLE_PCT_ONLY`; add `AGENT_TIMEOUT_SECONDS=60` once in the shared block, used by both the back end and the agent (plan.md "Where `AGENT_TIMEOUT_SECONDS` comes from"); add an agent block with `DATABASE_URL`, `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`, `ACTION_STAGE_DEADLINE_SECONDS=50` (must be lower than `AGENT_TIMEOUT_SECONDS`), `ACTION_DB_TIMEOUT_SECONDS=3` (applies to every gate statement), and the existing `ACTION_EXPIRY_SECONDS`, `ACTION_CONFIRM_REPLIES`, `ACTION_CANCEL_REPLIES`, `CONTRIBUTION_MIN_PCT` and `CONTRIBUTION_MAX_PCT`, one-line comment each
+- [X] T001 (baseline: back end 332 passed, agent 102 passed, front end all passed) Run `cd backend && pytest`, `cd agent && pytest` and `cd frontend && npm test` on the current working tree (revision 1 US1 uncommitted) and note the result as the baseline (paths: `backend/tests/`, `agent/tests/`, `frontend/`)
+- [X] T002 (file edited; NOT committed yet, as instructed: it must still be committed alone before any implementation commit) Amend `.specify/memory/constitution.md` with `/speckit-constitution`. In Principle II, the `source` rule becomes "`agent`, `mock` or `gate`", and "Outbound agent calls MUST have an explicit timeout (currently 10s)" becomes "configurable through `AGENT_TIMEOUT_SECONDS`, default 60 seconds". Bump the version to 1.1.0 (MINOR), set Last Amended, and record the rationale (spec 011, plan.md Complexity Tracking row 1). Commit this file alone, as its own commit, before any implementation commit; stage only this file
+- [X] T003 [P] Add `sqlalchemy>=2,<3`, `psycopg[binary]>=3,<4` and `pyjwt[crypto]>=2.10,<3` to `agent/requirements.txt` and `agent/pyproject.toml` [PR #11] (research R22), then reinstall the agent's virtual environment
+- [X] T004 [P] Revise the gate block in `.env.example` [PR #8] (research R16): remove `CONTRIBUTION_WHOLE_PCT_ONLY`; add `AGENT_TIMEOUT_SECONDS=60` once in the shared block, used by both the back end and the agent (plan.md "Where `AGENT_TIMEOUT_SECONDS` comes from"); add an agent block with `DATABASE_URL`, `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`, `ACTION_STAGE_DEADLINE_SECONDS=50` (must be lower than `AGENT_TIMEOUT_SECONDS`), `ACTION_DB_TIMEOUT_SECONDS=3` (applies to every gate statement), and the existing `ACTION_EXPIRY_SECONDS`, `ACTION_CONFIRM_REPLIES`, `ACTION_CANCEL_REPLIES`, `CONTRIBUTION_MIN_PCT` and `CONTRIBUTION_MAX_PCT`, one-line comment each
 
 ---
 
@@ -48,14 +48,14 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
 
 ### Back end: tests first
 
-- [ ] T005 [P] Edit `backend/tests/test_agent.py`. Delete the revision 1 `action` parsing tests. Replace the 10 s timeout test (lines 24–35) so it still proves the agent call has an explicit timeout: it is `AGENT_TIMEOUT_SECONDS` from the environment, default 60. Add:
+- [X] T005 [P] Edit `backend/tests/test_agent.py`. Delete the revision 1 `action` parsing tests. Replace the 10 s timeout test (lines 24–35) so it still proves the agent call has an explicit timeout: it is `AGENT_TIMEOUT_SECONDS` from the environment, default 60. Add:
   - `call_agent(..., token="t")` sends `Authorization: Bearer t`, and no header when `token` is `None`;
   - `source` `"gate"` is returned as `"gate"`, and absent or `null` as `None`; any other value or type logs a warning on `app.agent` and gives `None` while `reply` is still returned (contracts/agent-api.md);
   - the token never appears in captured logs;
   - at start-up the back end logs one line stating the `AGENT_TIMEOUT_SECONDS` value it uses (60 by default, the environment value when set).
 
   Confirm they fail
-- [ ] T006 [P] Edit `backend/tests/test_chat.py`. Give the fixed-signature fakes at lines 56 and 146 `**kwargs`. Add:
+- [X] T006 [P] Edit `backend/tests/test_chat.py`. Give the fixed-signature fakes at lines 56 and 146 `**kwargs`. Add:
   - the fake `call_agent` sees the `sessions` row for a new chat already committed (read through a separate session);
   - it receives the participant's bearer token unchanged, and the token never appears in captured logs;
   - a reply with `source` `"gate"` is stored as `gate` and returned by the history endpoint, and a malformed `source` is stored as `agent`;
@@ -63,44 +63,44 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - if storing the messages fails after the agent replied, the session row remains with no messages and doesn't appear in `GET /api/sessions`.
 
   Confirm they fail
-- [ ] T007 [P] Edit `backend/tests/test_ownership.py`: give `slow_agent` `**kwargs` and adapt `test_two_users_racing_for_one_new_session_id` so it still proves only one user can own a new session. The race now happens at session creation, before the agent call: the second creator gets 404 and the agent is not called for them (research R20). Give the fakes in `backend/tests/test_feedback.py` (line 143) and `backend/tests/test_entitlement.py` (line 39) `**kwargs`. Confirm the adapted race test fails
-- [ ] T008 [P] Edit `backend/tests/test_action_models.py` and `backend/tests/test_action_migration.py`: `action_audit.step` now accepts only `staged`, `rejected`, `confirmed`, `cancelled`, `expired`, `executed` or `failed`, and `proposed` is refused; the migration's `ck_action_audit_step` lists exactly those seven; `pending_action_id` stays nullable; keep the assertion `CONSTRAINT fk_pending_actions_session_id FOREIGN KEY(session_id) REFERENCES sessions (id)`. Confirm they fail
-- [ ] T009 [P] Write `backend/tests/test_agent_store_schema.py`: load `agent/src/wealth_agent/actions/store.py` by file path (it imports only SQLAlchemy) and compare it with `backend/app/models.py`: table and column names, types, nullability, named check constraints, the FK `pending_actions.session_id → sessions.id` and the partial unique index `uq_pending_actions_one_pending` (`WHERE status = 'pending'`) (research R21). Confirm it fails (no `store.py` yet; it passes after T024)
+- [X] T007 [P] Edit `backend/tests/test_ownership.py`: give `slow_agent` `**kwargs` and adapt `test_two_users_racing_for_one_new_session_id` so it still proves only one user can own a new session. The race now happens at session creation, before the agent call: the second creator gets 404 and the agent is not called for them (research R20). Give the fakes in `backend/tests/test_feedback.py` (line 143) and `backend/tests/test_entitlement.py` (line 39) `**kwargs`. Confirm the adapted race test fails
+- [X] T008 [P] Edit `backend/tests/test_action_models.py` and `backend/tests/test_action_migration.py`: `action_audit.step` now accepts only `staged`, `rejected`, `confirmed`, `cancelled`, `expired`, `executed` or `failed`, and `proposed` is refused; the migration's `ck_action_audit_step` lists exactly those seven; `pending_action_id` stays nullable; keep the assertion `CONSTRAINT fk_pending_actions_session_id FOREIGN KEY(session_id) REFERENCES sessions (id)`. Confirm they fail
+- [X] T009 [P] Write `backend/tests/test_agent_store_schema.py`: load `agent/src/wealth_agent/actions/store.py` by file path (it imports only SQLAlchemy) and compare it with `backend/app/models.py`: table and column names, types, nullability, named check constraints, the FK `pending_actions.session_id → sessions.id` and the partial unique index `uq_pending_actions_one_pending` (`WHERE status = 'pending'`) (research R21). Confirm it fails (no `store.py` yet; it passes after T024)
 
 ### Back end: implementation
 
-- [ ] T010 Add `verified_token` to `backend/app/auth.py`: a dependency that returns the raw bearer token after `verified_claims` has accepted it, and never logs it
-- [ ] T011 In `backend/app/agent.py` remove `AgentReply.action` and `_parse_action`; read `AGENT_TIMEOUT_SECONDS` from the environment (default 60); add the `token` argument that sets `Authorization: Bearer`; log the `AGENT_TIMEOUT_SECONDS` value in use once at start-up; add optional `AgentReply.source`, parsed as in contracts/agent-api.md. Run T005 until it passes
-- [ ] T012 In `backend/app/main.py`:
+- [X] T010 Add `verified_token` to `backend/app/auth.py`: a dependency that returns the raw bearer token after `verified_claims` has accepted it, and never logs it
+- [X] T011 In `backend/app/agent.py` remove `AgentReply.action` and `_parse_action`; read `AGENT_TIMEOUT_SECONDS` from the environment (default 60); add the `token` argument that sets `Authorization: Bearer`; log the `AGENT_TIMEOUT_SECONDS` value in use once at start-up; add optional `AgentReply.source`, parsed as in contracts/agent-api.md. Run T005 until it passes
+- [X] T012 In `backend/app/main.py`:
   - revert the revision 1 gate wiring: `get_action_gate`, `gate_step` in `_persist`, the classify step, the action handling and the `app.actions` imports;
   - add `_ensure_session`, which creates and commits the session row before `call_agent` (owner check; on `IntegrityError` retry once, then 404);
   - pass `verified_token` to `call_agent`;
   - store `source` `gate` when the agent says so, and keep `HistoryMessage.source` with `"gate"`.
 
   Run T006 and T007 until they pass
-- [ ] T013 Drop `proposed` from `ck_action_audit_step` in `backend/app/models.py` and `backend/alembic/versions/0005_add_action_gate.py`, keeping the FK. Run T008 until it passes
+- [X] T013 Drop `proposed` from `ck_action_audit_step` in `backend/app/models.py` and `backend/alembic/versions/0005_add_action_gate.py`, keeping the FK. Run T008 until it passes
 
 ### Move the revision 1 files into the agent (no logic changes)
 
-- [ ] T014 Move with `git mv`:
+- [X] T014 Move with `git mv`:
   - `backend/app/actions/__init__.py` → `agent/src/wealth_agent/actions/__init__.py`;
   - `backend/app/actions/gate.py` → `agent/src/wealth_agent/actions/gate.py`;
   - `backend/app/actions/contribution.py` → `agent/src/wealth_agent/actions/policies/contribution_policy.py`;
   - `backend/app/data/payroll.json` → `agent/src/wealth_agent/data/payroll.json`.
 
   Create the empty `agent/src/wealth_agent/actions/policies/__init__.py`, and delete the now-empty `backend/app/actions/` and `backend/app/data/`. Then run `cd backend && pytest`: all pass except `test_agent_store_schema.py` and the three test files moved in T015
-- [ ] T015 Move with `git mv`: `backend/tests/test_contribution.py` → `agent/tests/test_contribution_policy.py`; `backend/tests/test_action_support.py` → `agent/tests/test_action_support.py`; `backend/tests/test_action_gate.py` → `agent/tests/test_action_gate.py`. Run `cd backend && pytest` and confirm everything passes except `test_agent_store_schema.py`. The moved agent tests are expected to fail until they are ported
+- [X] T015 Move with `git mv`: `backend/tests/test_contribution.py` → `agent/tests/test_contribution_policy.py`; `backend/tests/test_action_support.py` → `agent/tests/test_action_support.py`; `backend/tests/test_action_gate.py` → `agent/tests/test_action_gate.py`. Run `cd backend && pytest` and confirm everything passes except `test_agent_store_schema.py`. The moved agent tests are expected to fail until they are ported
 
 ### Agent: tests first
 
-- [ ] T016 Create `agent/tests/conftest.py` with:
+- [X] T016 Create `agent/tests/conftest.py` with:
   - an RSA key pair and a `make_token(sub, ai_planning=True, **overrides)` signer, plus a fake key client;
   - an in-memory SQLite engine with the store's tables (including the minimal `sessions` table) and a helper that inserts a session row;
   - a store switch that makes the next gate transaction raise a database error or a statement-timeout error;
   - an injected clock, and an injected `monotonic` that a test can advance during the model's turn;
   - the `ScriptedModel`, moved out of `agent/tests/test_entrypoint.py`, now recording whether it was called and able to wait on a `threading.Barrier`, so two turns can be held inside the model at the same time.
-- [ ] T017 [P] Write `agent/tests/test_identity.py`, porting the token cases of `backend/tests/test_auth.py`. A valid token gives a `Verification` with `Participant(id=sub, claims)` and no failure. Each of these gives no participant, without raising, and the named failure: a missing header, an empty header and a `Basic` header give `sign_in_token_missing`; an expired token (beyond the 60 s leeway) gives `sign_in_token_expired`; wrong issuer, wrong audience, `HS256`, `none`, missing `sub`, a bad signature, a malformed token and an unreachable key set with no cached keys give `sign_in_token_invalid`. An unreachable key set uses the last good keys. The token never appears in captured logs. Confirm they fail
-- [ ] T018 [P] Write `agent/tests/test_action_config.py`. Move the settings cases out of `agent/tests/test_action_support.py` (defaults and environment overrides), delete the whole-percentage setting cases, and add the defaults `ACTION_STAGE_DEADLINE_SECONDS` 50, `ACTION_DB_TIMEOUT_SECONDS` 3 and `AGENT_TIMEOUT_SECONDS` 60. `startup_check` cases:
+- [X] T017 [P] Write `agent/tests/test_identity.py`, porting the token cases of `backend/tests/test_auth.py`. A valid token gives a `Verification` with `Participant(id=sub, claims)` and no failure. Each of these gives no participant, without raising, and the named failure: a missing header, an empty header and a `Basic` header give `sign_in_token_missing`; an expired token (beyond the 60 s leeway) gives `sign_in_token_expired`; wrong issuer, wrong audience, `HS256`, `none`, missing `sub`, a bad signature, a malformed token and an unreachable key set with no cached keys give `sign_in_token_invalid`. An unreachable key set uses the last good keys. The token never appears in captured logs. Confirm they fail
+- [X] T018 [P] Write `agent/tests/test_action_config.py`. Move the settings cases out of `agent/tests/test_action_support.py` (defaults and environment overrides), delete the whole-percentage setting cases, and add the defaults `ACTION_STAGE_DEADLINE_SECONDS` 50, `ACTION_DB_TIMEOUT_SECONDS` 3 and `AGENT_TIMEOUT_SECONDS` 60. `startup_check` cases:
   - missing any of `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL` or `DATABASE_URL` gives `enabled=False` and exactly one warning naming every missing setting;
   - a deadline not lower than the agent timeout (60 and 60) gives `enabled=False` and a warning naming both values;
   - all set, with 50 < 60, gives `enabled=True` and no warning;
@@ -109,24 +109,24 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - **no drift**: a test loads `backend/app/agent.py` and asserts its default timeout equals the agent's default (60), and that both read the variable named `AGENT_TIMEOUT_SECONDS`.
 
   Confirm they fail
-- [ ] T019 [P] Port `agent/tests/test_action_support.py` (moved in T015): point the footer and audit helper cases at the agent's `gate.py` and `store.py` with the conftest engine, keeping the cases. Add:
+- [X] T019 [P] Port `agent/tests/test_action_support.py` (moved in T015): point the footer and audit helper cases at the agent's `gate.py` and `store.py` with the conftest engine, keeping the cases. Add:
   - `store.transaction()` on a Postgres dialect issues `SET LOCAL statement_timeout` with `ACTION_DB_TIMEOUT_SECONDS`, for read-only and writing transactions alike (checked on the emitted SQL without a database);
   - a database error or timeout inside it raises `GateStoreError` and rolls back;
   - the audit helper only inserts, and accepts a `rejected` row without `pending_action_id`.
 
   Confirm the new cases fail
-- [ ] T020 [P] Port `agent/tests/test_contribution_policy.py` (moved in T015). Change the imports to `wealth_agent.actions.policies.contribution_policy` and the seed path to `agent/src/wealth_agent/data/payroll.json`, and rename `ContributionChange` to `ContributionPolicy`. Move the `DemoContributionService` and token cases into a new `agent/tests/test_contribution_service.py`. Remove the whole-only setting case, so 8.5 is always `not_whole_pct`. Keep every other case. Confirm they fail
+- [X] T020 [P] Port `agent/tests/test_contribution_policy.py` (moved in T015). Change the imports to `wealth_agent.actions.policies.contribution_policy` and the seed path to `agent/src/wealth_agent/data/payroll.json`, and rename `ContributionChange` to `ContributionPolicy`. Move the `DemoContributionService` and token cases into a new `agent/tests/test_contribution_service.py`. Remove the whole-only setting case, so 8.5 is always `not_whole_pct`. Keep every other case. Confirm they fail
 
 ### Agent: implementation
 
-- [ ] T021 Create `agent/src/wealth_agent/actions/identity.py` with `verify_participant(authorization) -> Verification` (participant or one of `sign_in_token_missing`, `sign_in_token_expired`, `sign_in_token_invalid`), using the rules of `backend/app/auth.py` (contracts/gate-interfaces.md). Run T017 until it passes
-- [ ] T022 Create `agent/src/wealth_agent/actions/config.py`: move `GateSettings` and the settings reader out of `gate.py`, drop `whole_pct_only`, add the deadline, the database timeout and the agent timeout, and add `startup_check()` returning `ActionsStatus(enabled, problems)` with one warning, and log the two values in use at start-up; it reads `AGENT_TIMEOUT_SECONDS` (default 60) and `ACTION_STAGE_DEADLINE_SECONDS` from the agent's environment. Run T018 until it passes
-- [ ] T023 Create `agent/src/wealth_agent/actions/store.py`:
+- [X] T021 Create `agent/src/wealth_agent/actions/identity.py` with `verify_participant(authorization) -> Verification` (participant or one of `sign_in_token_missing`, `sign_in_token_expired`, `sign_in_token_invalid`), using the rules of `backend/app/auth.py` (contracts/gate-interfaces.md). Run T017 until it passes
+- [X] T022 Create `agent/src/wealth_agent/actions/config.py`: move `GateSettings` and the settings reader out of `gate.py`, drop `whole_pct_only`, add the deadline, the database timeout and the agent timeout, and add `startup_check()` returning `ActionsStatus(enabled, problems)` with one warning, and log the two values in use at start-up; it reads `AGENT_TIMEOUT_SECONDS` (default 60) and `ACTION_STAGE_DEADLINE_SECONDS` from the agent's environment. Run T018 until it passes
+- [X] T023 Create `agent/src/wealth_agent/actions/store.py`:
   - define `contributions`, `pending_actions`, `action_audit` and a minimal `sessions` table, mirroring `backend/app/models.py` (data-model.md): `rate_pct BETWEEN 0 AND 100`; `status` one of `pending`, `confirmed`, `executed`, `cancelled`, `expired`, `failed`; the seven steps; `pending_action_id` nullable; `session_id` FK to `sessions.id`, not null; `uq_pending_actions_one_pending` with `postgresql_where` and `sqlite_where`;
   - add a lazy engine from `DATABASE_URL`, and `transaction()` with `SET LOCAL statement_timeout` on Postgres, raising `GateStoreError`;
   - it never creates tables outside tests.
-- [ ] T024 Edit `agent/src/wealth_agent/actions/gate.py` (moved): import from `store`, `config` and `identity` instead of `app.*`; rename the `ActionType` protocol to `ActionPolicy`; move the registry to `POLICIES` in `agent/src/wealth_agent/actions/policies/__init__.py`; keep the footer, audit, token issue and redeem helpers. Run T019 and `backend/tests/test_agent_store_schema.py` (T009) until they pass
-- [ ] T025 Split `agent/src/wealth_agent/actions/policies/contribution_policy.py`. Move the seed loader, `Seed` and `DemoContributionService` to a new `agent/src/wealth_agent/actions/contribution_service.py`, removing `Depends`, `get_db` and `get_contribution_service`. Keep `ContributionPolicy` (parse, check with whole percentages always, figures, texts) in the policy module and register it in `POLICIES`. Run T020 until it passes
+- [X] T024 Edit `agent/src/wealth_agent/actions/gate.py` (moved): import from `store`, `config` and `identity` instead of `app.*`; rename the `ActionType` protocol to `ActionPolicy`; move the registry to `POLICIES` in `agent/src/wealth_agent/actions/policies/__init__.py`; keep the footer, audit, token issue and redeem helpers. Run T019 and `backend/tests/test_agent_store_schema.py` (T009) until they pass
+- [X] T025 Split `agent/src/wealth_agent/actions/policies/contribution_policy.py`. Move the seed loader, `Seed` and `DemoContributionService` to a new `agent/src/wealth_agent/actions/contribution_service.py`, removing `Depends`, `get_db` and `get_contribution_service`. Keep `ContributionPolicy` (parse, check with whole percentages always, figures, texts) in the policy module and register it in `POLICIES`. Run T020 until it passes
 
 **Checkpoint**: the back end is a pass-through and its suite is green. The agent has identity, settings, the store and the moved gate core, all tested. No action reaches a participant yet.
 
@@ -140,7 +140,7 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
 
 **Tests first** (T026 to T030 are all written and seen to fail before T031)
 
-- [ ] T026 [P] [US1] Edit `agent/tests/test_action_tools.py`. Keep the argument cases (missing, boolean, NaN, infinite, "8%", "eight" give `{ok: false, error}`). Change the valid-number case:
+- [X] T026 [P] [US1] Edit `agent/tests/test_action_tools.py`. Keep the argument cases (missing, boolean, NaN, infinite, "8%", "eight" give `{ok: false, error}`). Change the valid-number case:
   - with `agent.state["action_turn"]` set and the policy passing, the tool returns `{ok: true, status: "held", note}` and sets `held_action`;
   - 51 returns `{ok: true, status: "rejected", reason: "out_of_range", message}`, appends `{type, reason}` to `rejected_actions`, and sets no `held_action`;
   - `allowed` false returns `rejected` (`education_only`);
@@ -149,7 +149,7 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - the row counts in all three gate tables are unchanged after every call.
 
   Prompt cases: the prompt tells the model to explain a `rejected` result using its message, to say the system will show a summary for `held`, never to say a change was made, and never to confirm for the participant. `PROMPT_VERSION` differs from `2026-11-10.1`. Confirm they fail
-- [ ] T027 [P] [US1] Edit `agent/tests/test_entrypoint.py`. Turn the `action` cases into `source` cases:
+- [X] T027 [P] [US1] Edit `agent/tests/test_entrypoint.py`. Turn the `action` cases into `source` cases:
   - `invoke(payload, context)` passes `context.request_headers["Authorization"]` to `run_turn`;
   - a staged turn returns `source: "gate"` and no `action` key;
   - an ordinary turn returns `reply` and `intent` only;
@@ -158,7 +158,7 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - `startup_check` runs once at import.
 
   Confirm they fail
-- [ ] T028 [US1] Port the US1 cases of `agent/tests/test_action_gate.py` (moved in T015). Replace `say()` with a helper that calls `run_turn` with a signed token, a session row and the scripted model calling the tool. Keep the assertions on the reply text, footer, rate, pending rows and audit. The expectation changes come from revision 3:
+- [X] T028 [US1] Port the US1 cases of `agent/tests/test_action_gate.py` (moved in T015). Replace `say()` with a helper that calls `run_turn` with a signed token, a session row and the scripted model calling the tool. Keep the assertions on the reply text, footer, rate, pending rows and audit. The expectation changes come from revision 3:
   - asking for 8% gives the gate's summary (5% to 8%, +$250.00, match unchanged at $416.67, "Nothing has changed yet", footer) with `source: "gate"` replacing the model's text, and the rate is still 5%;
   - "confirm" stores 8%, says it changed from 5% to 8%, and the scripted model is not called; "cancel" leaves 5%;
   - "Confirm!" and " cancel. " are accepted;
@@ -168,8 +168,8 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - after building a new gate and agent on the same engine (restart), the pending change can still be confirmed, and the next summary after a confirmed 8% shows 8%.
 
   Delete the two back-end-only cases that revision 3 makes obsolete (`test_mock_reply_stages_nothing_but_confirm_and_cancel_still_answer` and `test_a_pending_change_can_be_confirmed_when_the_agent_is_down`); the agent-down path is covered by T006 and the spec's accepted agent-down edge case. Confirm they fail
-- [ ] T029 [US1] Port the two genericity cases in `agent/tests/test_action_gate.py`: a dummy policy registered in `POLICIES` runs check, stage, confirm and cancel through the unchanged `gate.py`; the contribution policy works with a fake `ContributionService` passed through `run_turn(..., contributions_for=...)` (FR-002, FR-021). Confirm they fail
-- [ ] T030 [US1] Write conversation tests in `agent/tests/test_action_gate.py` (FR-013, research R19):
+- [X] T029 [US1] Port the two genericity cases in `agent/tests/test_action_gate.py`: a dummy policy registered in `POLICIES` runs check, stage, confirm and cancel through the unchanged `gate.py`; the contribution policy works with a fake `ContributionService` passed through `run_turn(..., contributions_for=...)` (FR-002, FR-021). Confirm they fail
+- [X] T030 [US1] (the three "code replies when actions can't run" checks are written with T037 and T041, where those replies are implemented in US2) Write conversation tests in `agent/tests/test_action_gate.py` (FR-013, research R19):
   - after a staged turn, the agent's final assistant message is the summary without the footer;
   - after "confirm", the conversation ends with the user's "confirm" and the gate's result without the footer; the same after "cancel" and after the "nothing pending" reply;
   - after each of the three code replies when actions can't run (settings missing, sign-in expired, store unreadable), the conversation is unchanged;
@@ -180,8 +180,8 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
 
 **Implementation**
 
-- [ ] T031 [US1] Edit `agent/src/wealth_agent/action_tools.py`: read `agent.state["action_turn"]`, call `gate.check_proposal`, store `held_action` on held or append to `rejected_actions` on rejected, and return the result as in contracts/agent-api.md. It never writes to the database. Run T026's tool cases until they pass
-- [ ] T032 [US1] In `agent/src/wealth_agent/actions/gate.py` add:
+- [X] T031 [US1] Edit `agent/src/wealth_agent/action_tools.py`: read `agent.state["action_turn"]`, call `gate.check_proposal`, store `held_action` on held or append to `rejected_actions` on rejected, and return the result as in contracts/agent-api.md. It never writes to the database. Run T026's tool cases until they pass
+- [X] T032 [US1] In `agent/src/wealth_agent/actions/gate.py` add:
   - `check_proposal` (read-only);
   - `record_rejections` (`rejected` rows, no `pending_action_id`);
   - `stage`: one transaction with `record_rejections`; re-check; replace an older pending change as `cancelled` with reason `replaced`; insert with `expires_at = staged_at + ACTION_EXPIRY_SECONDS`; audit `staged`;
@@ -191,7 +191,7 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - `refuse_reply` for `nothing_pending`.
 
   Every gate message goes through the footer helper
-- [ ] T033 [US1] Create `agent/src/wealth_agent/actions/turn.py` with `run_turn`, following plan.md "Agent: one turn" for the US1 path:
+- [X] T033 [US1] Create `agent/src/wealth_agent/actions/turn.py` with `run_turn`, following plan.md "Agent: one turn" for the US1 path:
   - verify the participant;
   - handle an exact consent reply, or the nothing-pending reply, in code;
   - clear the turn memory, then run the model with `action_turn` set, removing all turn memory in a `finally`;
@@ -199,8 +199,8 @@ description: "Task list for spec 011 revision 3: action gate in the agent runtim
   - update the conversation (R19).
 
   Run T028, T029 and T030 until they pass
-- [ ] T034 [US1] Edit `agent/agent.py` [PR #11]: in `invoke(payload, context)` read the `Authorization` header and call `actions.turn.run_turn` with `agent_for` and `ask`; key `_sessions` by (participant, `session_id`), and give a request without a verified participant a fresh, empty agent that is never stored; call `startup_check()` once at import. Run T027 until it passes
-- [ ] T035 [US1] Edit `agent/src/wealth_agent/prompts.py` with the revision 3 guidance (plan.md "Agent prompt change") and bump `PROMPT_VERSION`. Run T026's prompt cases until they pass, then run `cd agent && pytest` and `cd backend && pytest`
+- [X] T034 [US1] Edit `agent/agent.py` [PR #11]: in `invoke(payload, context)` read the `Authorization` header and call `actions.turn.run_turn` with `agent_for` and `ask`; key `_sessions` by (participant, `session_id`), and give a request without a verified participant a fresh, empty agent that is never stored; call `startup_check()` once at import. Run T027 until it passes
+- [X] T035 [US1] Edit `agent/src/wealth_agent/prompts.py` with the revision 3 guidance (plan.md "Agent prompt change") and bump `PROMPT_VERSION`. Run T026's prompt cases until they pass, then run `cd agent && pytest` and `cd backend && pytest`
 
 **Checkpoint**: User Story 1 works end to end with signed tokens and the scripted model. This is the MVP.
 

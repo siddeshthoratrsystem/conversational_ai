@@ -1,11 +1,14 @@
-"""Contribution action: seed, money figures, rules and the contribution service (spec 011)."""
+"""Contribution policy: seed, money figures and rules (spec 011, ported by T020)."""
 
 import json
 from decimal import Decimal
 
 import pytest
 
-from app.actions import contribution as c
+from wealth_agent.actions import config
+from wealth_agent.actions.contribution_service import DemoContributionService
+from wealth_agent.actions.policies import contribution_policy as c
+from wealth_agent.actions import gate
 
 
 # --- T004: demo payroll seed -------------------------------------------------------------
@@ -111,35 +114,42 @@ def test_rounding_is_half_up_from_exact_values(seed):
     assert s.match_diff == Decimal("-83.33")
 
 
-# --- T018: rules and the contribution service -------------------------------------------------
+# --- rules -------------------------------------------------
 
-from datetime import datetime, timedelta, timezone  # noqa: E402
-
-from sqlalchemy.orm import Session  # noqa: E402
-
-from app import models  # noqa: E402
-from app.actions import gate  # noqa: E402
-
-NOW = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+@pytest.fixture
+def conn(engine):
+    with engine.connect() as connection:
+        yield connection
 
 
 @pytest.fixture
-def db(engine):
-    with Session(engine) as session:
-        yield session
-
-
-@pytest.fixture
-def service(db, seed):
-    return c.DemoContributionService(db, seed)
+def service(conn, seed):
+    return DemoContributionService(conn, seed)
 
 
 def make_action(service, seed, **settings):
-    return c.ContributionChange(service, seed, gate.GateSettings(**settings))
+    return c.ContributionPolicy(service, seed, config.GateSettings(**settings))
 
 
-def test_current_rate_is_the_seed_rate_until_a_change(service):
-    assert service.current_rate("alice") == 5
+def test_the_shipped_seed_is_in_the_agent_package():
+    from pathlib import Path
+
+    assert c.SEED_PATH == Path(c.__file__).resolve().parents[2] / "data" / "payroll.json"
+    assert c.SEED_PATH.exists()
+
+
+def test_8_5_is_always_not_whole_pct_whatever_the_environment(service, seed, monkeypatch):
+    monkeypatch.setenv("CONTRIBUTION_WHOLE_PCT_ONLY", "false")
+    action = make_action(service, seed)
+    with pytest.raises(gate.GateRefusal) as refused:
+        action.check("alice", action.parse({"new_rate_pct": 8.5}))
+    assert refused.value.reason == "not_whole_pct"
+
+
+def test_the_policy_is_registered_in_policies(service, seed):
+    from wealth_agent.actions.policies import POLICIES
+
+    assert "contribution_change" in POLICIES
 
 
 def test_rule_accepts_the_whole_range(service, seed):
@@ -185,77 +195,3 @@ def test_range_follows_the_settings(service, seed):
         with pytest.raises(gate.GateRefusal) as refused:
             action.check("alice", action.parse({"new_rate_pct": rate}))
         assert refused.value.reason == reason
-
-
-# --- T019: confirmation token ---------------------------------------------------------------------
-
-def stage(db, user="alice", session_id="s1", rate=8):
-    if db.get(models.Session, session_id) is None:
-        db.add(models.Session(id=session_id, user_id=user))
-        db.flush()
-    pending = models.PendingAction(
-        user_id=user,
-        session_id=session_id,
-        action_type="contribution_change",
-        params={"new_rate_pct": rate},
-        snapshot={"current_rate_pct": 5},
-        status="confirmed",
-        staged_at=NOW,
-        expires_at=NOW + timedelta(minutes=5),
-    )
-    db.add(pending)
-    db.flush()
-    return pending
-
-
-def test_valid_token_applies_the_change(db, service):
-    token = gate.issue_token(db, stage(db))
-    assert service.apply_change("alice", 8, token) == 8
-    assert service.current_rate("alice") == 8
-    assert db.get(models.Contribution, "alice").rate_pct == 8
-
-
-def test_reused_token_is_refused_and_the_rate_changes_once(db, service):
-    token = gate.issue_token(db, stage(db))
-    service.apply_change("alice", 8, token)
-    with pytest.raises(gate.GateRefusal) as refused:
-        service.apply_change("alice", 9, token)
-    assert refused.value.reason == "already_handled"
-    assert service.current_rate("alice") == 8
-
-
-def test_token_for_another_participant_is_refused(db, service):
-    token = gate.issue_token(db, stage(db, user="alice"))
-    with pytest.raises(gate.GateRefusal) as refused:
-        service.apply_change("bob", 8, token)
-    assert refused.value.reason == "token_invalid"
-    assert db.get(models.Contribution, "bob") is None
-    assert db.get(models.Contribution, "alice") is None
-
-
-def test_a_wrong_token_is_refused(db, service):
-    pending = stage(db)
-    gate.issue_token(db, pending)
-    forged = gate.ConfirmationToken("forged", pending.id, "alice", "s1")
-    with pytest.raises(gate.GateRefusal) as refused:
-        service.apply_change("alice", 8, forged)
-    assert refused.value.reason == "token_invalid"
-    assert db.get(models.Contribution, "alice") is None
-
-
-def test_only_the_hash_of_the_token_is_stored(db):
-    import hashlib
-
-    pending = stage(db)
-    token = gate.issue_token(db, pending)
-    db.commit()
-    db.refresh(pending)
-    assert pending.token_hash == hashlib.sha256(token.raw.encode()).hexdigest()
-    assert token.raw not in {str(v) for v in vars(pending).values()}
-    assert len(token.raw) >= 32
-
-
-def test_each_participants_rate_is_their_own(db, service):
-    service.apply_change("alice", 8, gate.issue_token(db, stage(db, "alice", "s1")))
-    assert service.current_rate("alice") == 8
-    assert service.current_rate("bob") == 5
