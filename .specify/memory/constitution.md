@@ -1,3 +1,12 @@
+<!--
+Sync Impact Report
+Version change: 1.0.0 -> 1.1.0 (MINOR: Principle II materially expanded)
+Modified: Principle II. `source` gains `gate`; the agent timeout is configurable through
+`AGENT_TIMEOUT_SECONDS` (default 60 seconds) instead of a fixed 10 seconds.
+Rationale: spec 011 (action gate), plan.md Complexity Tracking row 1 and the "In this branch" note.
+Flagged for the agent owner's review.
+-->
+
 # Conversational AI Constitution
 
 ## Core Principles
@@ -26,13 +35,15 @@ The agent is an external dependency that may be absent or unhealthy.
   `AGENT_URL`, a timeout, a connection error, a non-2xx response and a malformed body.
 - On failure the backend MUST return a mock reply with HTTP 200.
 - Each fallback MUST be logged as a warning that states the reason.
-- Each assistant message MUST record its `source` (`agent` or `mock`). Agent replies MUST
+- Each assistant message MUST record its `source` (`agent`, `mock` or `gate`). Agent replies MUST
   also record `latency_ms`.
-- Outbound agent calls MUST have an explicit timeout (currently 10s).
+- Outbound agent calls MUST have an explicit timeout, configurable through
+  `AGENT_TIMEOUT_SECONDS` (default 60 seconds).
 
 Rationale: the frontend and backend have to stay usable and demoable before AgentCore
 access exists, and while it is down. Recording the source keeps mock data separable from
-real agent data.
+real agent data. `gate` marks text written by the action gate in code, which is neither
+model output nor a mock.
 
 ### III. Persistence Through Alembic Only
 
@@ -125,4 +136,4 @@ Compliance: reviewers check each PR against the principles. `/speckit-analyze` f
 constitution conflicts in specs, plans and tasks, and those conflicts MUST be resolved
 before implementation.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-04 | **Last Amended**: 2026-11-04
+**Version**: 1.1.0 | **Ratified**: 2026-11-04 | **Last Amended**: 2026-11-10
