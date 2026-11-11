@@ -1,5 +1,5 @@
 import { Bell, History, List, MessageSquarePlus, type LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentProps, Ref } from "react";
 
 import { cn } from "@convai/ui/cn";
 
@@ -9,7 +9,7 @@ function RailButton({
   active,
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { icon: LucideIcon; label: string; active?: boolean }) {
+}: ComponentProps<"button"> & { icon: LucideIcon; label: string; active?: boolean }) {
   return (
     <button
       type="button"
@@ -28,15 +28,21 @@ function RailButton({
   );
 }
 
-/** Alfred's left icon rail (Figma A9). Tasks and Notifications are in the design but not built yet. */
+/** Alfred's left icon rail (Figma A9). Tasks opens the Guided tasks overlay and keeps it open (spec 010); Notifications isn't built yet. */
 export function SideRail({
   historyOpen,
   onToggleHistory,
+  tasksOpen,
+  onOpenTasks,
+  tasksButtonRef,
   onNewChat,
   initial,
 }: {
   historyOpen: boolean;
   onToggleHistory: () => void;
+  tasksOpen: boolean;
+  onOpenTasks: () => void;
+  tasksButtonRef?: Ref<HTMLButtonElement>;
   onNewChat: () => void;
   initial: string;
 }) {
@@ -47,7 +53,15 @@ export function SideRail({
     >
       {/* Figma order: Chat, Tasks, History, Notifications. "Chat" starts a new conversation. */}
       <RailButton icon={MessageSquarePlus} label="New chat" onClick={onNewChat} />
-      <RailButton icon={List} label="Tasks (coming soon)" disabled />
+      <RailButton
+        ref={tasksButtonRef}
+        icon={List}
+        label="Tasks"
+        active={tasksOpen}
+        aria-expanded={tasksOpen}
+        aria-controls="guided-tasks"
+        onClick={onOpenTasks}
+      />
       <RailButton
         icon={History}
         label="History"

@@ -42,6 +42,7 @@
       --color-success-50: #e6fff2;
       --color-success-100: #c2ffe0;
       --color-danger-500: #f95853;
+      --color-danger-700: #c00000;
     }
     @variant dark {
       --color-white: #ffffff;
@@ -79,6 +80,7 @@
       --color-success-50: #e6fff2;
       --color-success-100: #c2ffe0;
       --color-danger-500: #f95853;
+      --color-danger-700: #c00000;
     }
   }
 }

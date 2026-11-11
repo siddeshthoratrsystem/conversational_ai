@@ -49,13 +49,11 @@ describe("branding", () => {
     expect(rail.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("marks Tasks and Notifications as coming soon instead of leaving dead buttons", () => {
+  it("marks Notifications as coming soon instead of leaving a dead button", () => {
     render(<App />);
-    for (const name of [/tasks/i, /notifications/i]) {
-      const button = screen.getByRole("button", { name }) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute("aria-label")).toMatch(/coming soon/);
-    }
+    const button = screen.getByRole("button", { name: /notifications/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-label")).toMatch(/coming soon/);
   });
 });
 

@@ -7,6 +7,7 @@ import { getSessionIds, rememberSession } from "@/sessionStore";
 import { AlfredHeader } from "./AlfredHeader";
 import { Composer } from "./Composer";
 import FeedbackBar, { type FeedbackState } from "./FeedbackBar";
+import { GuidedTasks } from "./GuidedTasks";
 import { HistoryPanel } from "./HistoryPanel";
 import { AssistantMessage, PendingReply, UserMessage } from "./Messages";
 import { SideRail } from "./SideRail";
@@ -30,6 +31,9 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [historyError, setHistoryError] = useState<HistoryError | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // The Guided tasks overlay covers the chat, which stays mounted so nothing is lost (spec 010 FR-009).
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const tasksButton = useRef<HTMLButtonElement>(null);
   // Feedback per assistant message id, kept for this visit across chat switches (spec 004 FR-011).
   const [feedback, setFeedback] = useState<Map<number, FeedbackState>>(() => new Map());
   const savingFeedback = useRef<Set<number>>(new Set()); // one save per reply at a time (FR-010)
@@ -77,6 +81,7 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
           history.messages.map((m) => ({ id: m.id, role: m.role, text: m.content, time: m.created_at })),
         );
         setHistoryError(null);
+        setTasksOpen(false);
         if (isNarrow()) setHistoryOpen(false);
       } catch {
         if (request !== openRequest.current) return;
@@ -92,8 +97,21 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
     showSession(crypto.randomUUID(), []);
     setHistoryError(null);
     setInput("");
+    setTasksOpen(false);
     if (isNarrow()) setHistoryOpen(false);
   }
+
+  // Escape closes the overlay and hands focus back to the button that opened it (spec 010 FR-008).
+  useEffect(() => {
+    if (!tasksOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setTasksOpen(false);
+      tasksButton.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [tasksOpen]);
 
   async function sendText(raw: string) {
     const text = raw.trim();
@@ -174,6 +192,9 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
         <SideRail
           historyOpen={historyOpen}
           onToggleHistory={() => setHistoryOpen((o) => !o)}
+          tasksOpen={tasksOpen}
+          onOpenTasks={() => setTasksOpen(true)}
+          tasksButtonRef={tasksButton}
           onNewChat={newChat}
           initial={user.displayName[0]}
         />
@@ -260,6 +281,7 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
           <div className="relative mx-auto w-full max-w-200 px-6">
             <Composer value={input} onChange={setInput} onSend={() => void sendText(input)} busy={waiting} />
           </div>
+          {tasksOpen && <GuidedTasks />}
         </main>
       </div>
     </div>

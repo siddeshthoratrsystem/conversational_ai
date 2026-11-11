@@ -42,6 +42,7 @@
   --color-success-50: #e6fff2;
   --color-success-100: #c2ffe0;
   --color-danger-500: #f95853;
+  --color-danger-700: #c00000;
   --text-2xs: 10px;
   --text-2xs--line-height: 12px;
   --text-xs: 12px;
@@ -62,6 +63,8 @@
   --text-4xl--line-height: 54px;
   --text-5xl: 48px;
   --text-5xl--line-height: 54px;
+  --text-display-sm: 40px;
+  --text-display-sm--line-height: 48px;
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;

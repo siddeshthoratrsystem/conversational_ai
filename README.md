@@ -195,6 +195,7 @@ and the "Good morning" welcome (frame S1) on an empty chat.
   | `text-field`, `textarea` | Labelled inputs with error state |
   | `card`, `status-tag`, `progress-bar`, `key-value-list`, `tabs` | Dashboard building blocks for the next screens |
   | `logo`, `soundwave` | Brand assets from Figma (`src/assets/brand/`) and the composer's voice glyph |
+  | `guided-task-icon` | Figma "AI / Guided task icon": a guided task's icon in its light blue tile (spec 010) |
   | `cn` | Joins class names; later Tailwind classes win |
 
 - Add a component as `packages/ui/src/web/<name>.tsx`, using only token classes. Web-only components fail at type
