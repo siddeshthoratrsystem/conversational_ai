@@ -4,7 +4,7 @@ Chat app (ChatGPT-like) → FastAPI backend → AWS Bedrock AgentCore agent that
 
 | Folder      | What                              | Owner  |
 |-------------|-----------------------------------|--------|
-| `frontend/` | Website and mobile app, with shared packages | Vinod  |
+| `frontend/` | Website and mobile app, with shared packages | Vinod/Harshit  |
 | `backend/`  | FastAPI + Postgres                | Rajesh |
 | `agent/`    | AgentCore agent (needs R Systems AWS + AgentCore access) | TBD |
 

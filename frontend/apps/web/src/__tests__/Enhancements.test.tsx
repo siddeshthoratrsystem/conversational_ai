@@ -1,10 +1,11 @@
 // Spec 005 UI, restyled as full-page Alfred: branding, welcome + suggestions, Markdown replies, disclaimer note.
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
+import { blend } from "../chat/Flock";
 import { greetingFor } from "../chat/Welcome";
-import { installServer, messageBox, openHistory, seed, signInAs, type Server } from "./helpers";
+import { installServer, messageBox, openHistory, seed, signInAs, startChat, type Server } from "./helpers";
 
 const KEY = "convai.sessionIds";
 let server: Server;
@@ -16,6 +17,7 @@ async function openSeeded(reply: string) {
   seed(server, "s", [["question", reply]]);
   localStorage.setItem(KEY, JSON.stringify(["s"]));
   render(<App />);
+  await startChat("warm-up");
   fireEvent.click(await openHistory().findByRole("button", { name: /question/ }));
   await waitFor(() => expect(shownMessages()).toHaveLength(2));
 }
@@ -40,8 +42,9 @@ describe("branding", () => {
     expect(within(banner).getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 
-  it("puts the header above the rail, and the rail before the chat", () => {
+  it("puts the header above the rail, and the rail before the chat", async () => {
     render(<App />);
+    await startChat();
     const banner = screen.getByRole("banner");
     const rail = screen.getByRole("navigation", { name: "Alfred" });
     const chat = screen.getByRole("main");
@@ -49,11 +52,56 @@ describe("branding", () => {
     expect(rail.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("marks Notifications as coming soon instead of leaving a dead button", () => {
+  it("has no rail on the homepage; it appears once a chat starts and goes again on New chat (spec 016)", async () => {
+    let release!: () => void;
+    server.holdChat = new Promise<void>((r) => (release = r));
     render(<App />);
-    const button = screen.getByRole("button", { name: /notifications/i }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.getAttribute("aria-label")).toMatch(/coming soon/);
+    const rail = () => screen.queryByRole("navigation", { name: "Alfred" });
+    expect(rail()).toBeNull();
+
+    fireEvent.change(messageBox(), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(rail()).not.toBeNull()); // shown while the first reply is pending
+    await act(async () => release());
+    await screen.findByText("(mock) You said: hello");
+    expect(rail()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(document.querySelector(".layout")!.classList.contains("open")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(rail()).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Past chats" })).toBeNull(); // the panel goes with the rail
+    expect(document.querySelector(".layout")!.classList.contains("open")).toBe(false);
+  });
+
+  it("has the design's rail: logo for New chat, labelled Chat / Tasks / History tabs, and the avatar", async () => {
+    render(<App />);
+    await startChat();
+    const rail = within(screen.getByRole("navigation", { name: "Alfred" }));
+    expect(rail.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "New chat",
+      "Chat",
+      "Tasks",
+      "History",
+    ]);
+    expect(rail.queryByRole("button", { name: /notifications/i })).toBeNull(); // hidden in the design
+    expect(rail.getByText("V")).toBeTruthy(); // avatar initial
+  });
+
+  it("marks Chat as the current tab, and Tasks while the Guided tasks page is open; Chat goes back to the chat", async () => {
+    render(<App />);
+    await startChat();
+    const chatTab = () => screen.getByRole("button", { name: "Chat" });
+    expect(chatTab().getAttribute("aria-current")).toBe("page");
+
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(screen.getByRole("region", { name: "Guided tasks" })).toBeTruthy();
+    expect(chatTab().getAttribute("aria-current")).toBeNull();
+
+    fireEvent.click(chatTab());
+    expect(screen.queryByRole("region", { name: "Guided tasks" })).toBeNull();
+    expect(chatTab().getAttribute("aria-current")).toBe("page");
+    screen.getByText("(mock) You said: hello"); // same conversation
   });
 });
 
@@ -82,17 +130,92 @@ describe("welcome screen", () => {
     }
   });
 
-  it("offers suggested questions on an empty chat and sends one when clicked", async () => {
+  it("shows the Figma murmuration (Flock) above the greeting, hidden from screen readers", () => {
     render(<App />);
-    expect(screen.getAllByRole("button", { name: /\?|years/ }).length).toBe(4);
-    fireEvent.click(screen.getByRole("button", { name: /What is my portfolio worth\?/ }));
-    await waitFor(() =>
-      expect(shownMessages()).toEqual([
-        "What is my portfolio worth?",
-        "(mock) You said: What is my portfolio worth?",
-      ]),
+    const flock = screen.getByRole("main").querySelector("svg.text-flock")!;
+    expect(flock.querySelectorAll("circle")).toHaveLength(320);
+    expect(flock.closest("[aria-hidden]")).not.toBeNull();
+  });
+
+  it("keeps the flock moving on the homepage, and stops it once a chat starts", async () => {
+    const raf = vi.fn(() => 7);
+    const cancel = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", raf);
+    vi.stubGlobal("cancelAnimationFrame", cancel);
+    render(<App />);
+    expect(raf).toHaveBeenCalled();
+    await startChat();
+    expect(cancel).toHaveBeenCalledWith(7);
+  });
+
+  it("never holds the flock in place: its shape changes in every part of the loop", () => {
+    for (let t = 0; t < 18; t += 0.25) {
+      if (Math.abs(t % 4.5) < 1e-9) continue; // the turning points at the cloud and the sphere
+      expect(blend(t + 0.05)).not.toBeCloseTo(blend(t), 4);
+    }
+  });
+
+  it("leaves the flock still when the member prefers reduced motion", () => {
+    const raf = vi.fn(() => 1);
+    vi.stubGlobal("requestAnimationFrame", raf);
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce") }));
+    render(<App />);
+    expect(raf).not.toHaveBeenCalled();
+  });
+
+  it("shows the plan update line under the greeting", () => {
+    render(<App />);
+    screen.getByText(
+      "Your plan moved this week: savings are up $120, and retirement still needs attention. Where shall we start?",
     );
-    expect(screen.queryByRole("button", { name: /What is my portfolio worth\?/ })).toBeNull();
+  });
+
+  it("shows the four starter cards with the design's copy, in order (spec 016 FR-003)", () => {
+    render(<App />);
+    const cards = screen.getAllByRole("article");
+    expect(cards.map((card) => within(card).getByRole("heading", { level: 3 }).textContent)).toEqual([
+      "You’re $500K short of your retirement goal",
+      "Your Chase savings has $3,200 earning nothing",
+      "Pay off your debt faster than you think",
+      "Put your finances on autopilot",
+    ]);
+    expect(cards.map((card) => card.querySelector("svg.lucide")!.getAttribute("class"))).toEqual([
+      expect.stringContaining("lucide-chart-line"),
+      expect.stringContaining("lucide-sprout"),
+      expect.stringContaining("lucide-trending-down"),
+      expect.stringContaining("lucide-zap"), // lightning, as in the design
+    ]);
+    within(cards[0]).getByText("Increasing your 401(k) contribution by $220 a month closes that gap by retirement.");
+    within(cards[1]).getByText("There's likely a better place for that money to sit, want to see?");
+    within(cards[2]).getByText("I'll build a personalized payoff plan that fits your monthly budget.");
+    within(cards[3]).getByText(
+      "I can watch for overspending, send a monthly spend report, and more, without you having to ask.",
+    );
+    expect(cards.map((card) => within(card).getByRole("button").textContent)).toEqual([
+      "Close the gap",
+      "Tell me more",
+      "Build my plan",
+      "Explore automations",
+    ]);
+  });
+
+  it.each([
+    ["Close the gap: You’re $500K short of your retirement goal", "How can I close the $500K gap in my retirement savings?"],
+    ["Tell me more: Your Chase savings has $3,200 earning nothing", "Where could the $3,200 in my Chase savings earn more?"],
+    ["Build my plan: Pay off your debt faster than you think", "Build me a plan to pay off my debt faster."],
+    ["Explore automations: Put your finances on autopilot", "What could you automate for my finances?"],
+  ])("sends the starter prompt when %s is clicked", async (button, prompt) => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    await waitFor(() => expect(shownMessages()).toEqual([prompt, `(mock) You said: ${prompt}`]));
+    expect(screen.queryAllByRole("article")).toEqual([]);
+  });
+
+  it("has no coming-soon starters left: every card's button is enabled", () => {
+    render(<App />);
+    const buttons = screen.getAllByRole("article").map((card) => within(card).getByRole("button") as HTMLButtonElement);
+    expect(buttons.filter((b) => b.disabled)).toEqual([]);
+    expect(screen.queryByText("Coming soon")).toBeNull();
   });
 });
 
@@ -128,5 +251,54 @@ describe("assistant replies", () => {
     const time = screen.getByRole("main").querySelector("time[datetime]")!;
     expect(time.getAttribute("datetime")).toMatch(/^2026-11-04T09:00/);
     expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
+  });
+
+  it("show the time under each of Alfred's replies, for reopened and new chats alike", async () => {
+    await openSeeded("answer");
+    const times = () => Array.from(screen.getByRole("main").querySelectorAll("time[datetime]"));
+    expect(times().map((t) => t.getAttribute("datetime"))).toEqual([
+      expect.stringMatching(/^2026-11-04T09:00/), // question
+      expect.stringMatching(/^2026-11-04T09:00/), // answer
+    ]);
+    expect(times()[1].closest(".flex-col")!.querySelector(".message")!.textContent).toBe("answer");
+
+    const before = Date.now();
+    fireEvent.change(messageBox(), { target: { value: "more" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("(mock) You said: more");
+    const replyTime = times().at(-1)!;
+    expect(Date.parse(replyTime.getAttribute("datetime")!)).toBeGreaterThanOrEqual(before - 1000);
+    expect(replyTime.textContent).toMatch(/\d/);
+    expect(times()).toHaveLength(4);
+  });
+
+  it("copy the member's message to the clipboard and confirm it, then reset", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await openSeeded("answer");
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    expect(writeText).toHaveBeenCalledWith("question");
+    await screen.findByRole("button", { name: "Copied" });
+    await screen.findByRole("button", { name: "Copy message" }, { timeout: 3000 }); // back after 2 s
+  });
+
+  it("still copy where the clipboard API is unavailable (not a secure page)", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    let copied = "";
+    const execCommand = vi.fn(() => {
+      copied = (document.activeElement as HTMLTextAreaElement).value;
+      return true;
+    });
+    document.execCommand = execCommand;
+    try {
+      await openSeeded("answer");
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+      await screen.findByRole("button", { name: "Copied" });
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(copied).toBe("question");
+      expect(document.querySelectorAll("textarea")).toHaveLength(1); // only the message box is left
+    } finally {
+      delete (document as { execCommand?: unknown }).execCommand;
+    }
   });
 });

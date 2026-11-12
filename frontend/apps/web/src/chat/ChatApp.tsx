@@ -11,6 +11,7 @@ import { GuidedTasks } from "./GuidedTasks";
 import { HistoryPanel } from "./HistoryPanel";
 import { AssistantMessage, PendingReply, UserMessage } from "./Messages";
 import { SideRail } from "./SideRail";
+import { LISTENING_STEP, TASKS_STEP, TOUR_STEPS, Tour } from "./Tour";
 import { Welcome } from "./Welcome";
 
 // `failed` marks the "Something went wrong." reply so it gets the error style (view only, never sent).
@@ -34,6 +35,8 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
   // The Guided tasks overlay covers the chat, which stays mounted so nothing is lost (spec 010 FR-009).
   const [tasksOpen, setTasksOpen] = useState(false);
   const tasksButton = useRef<HTMLButtonElement>(null);
+  // The guided tour's step (0-based), or null when it isn't running. It starts from the homepage.
+  const [tourStep, setTourStep] = useState<number | null>(null);
   // Feedback per assistant message id, kept for this visit across chat switches (spec 004 FR-011).
   const [feedback, setFeedback] = useState<Map<number, FeedbackState>>(() => new Map());
   const savingFeedback = useRef<Set<number>>(new Set()); // one save per reply at a time (FR-010)
@@ -145,7 +148,10 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
       void loadSessions();
     }
     if (viewVersion.current === version) {
-      setMessages((m) => [...m, { id: replyId, role: "assistant", text: reply, failed: !ok }]);
+      setMessages((m) => [
+        ...m,
+        { id: replyId, role: "assistant", text: reply, time: new Date().toISOString(), failed: !ok },
+      ]);
     } else if (ok && activeRef.current === sessionId) {
       // The user left and came back while waiting; the server has the full thread now.
       void openSession(sessionId);
@@ -154,11 +160,30 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
 
   const waiting = pending.has(activeSessionId);
   const showWelcome = messages.length === 0 && !waiting;
+  // The homepage has no rail (spec 016): it appears once a chat starts, and the History panel with it.
+  // Guided tasks opened from the tour shows it too, as in the design.
+  const showRail = !showWelcome || tasksOpen;
+  const panelOpen = historyOpen && showRail;
 
   // Keep the newest message in view (not on the welcome screen, which should start at its greeting).
   useEffect(() => {
     if (messages.length > 0 || waiting) end.current?.scrollIntoView?.({ block: "end" });
   }, [messages.length, waiting]);
+
+  function startTour() {
+    setTasksOpen(false);
+    setTourStep(0);
+  }
+
+  // Next, Done, or tapping the ringed voice button. Step 6 is about the Guided tasks page, so that opens first.
+  function nextTourStep() {
+    if (tourStep === null) return;
+    const step = tourStep + 1;
+    if (step === TASKS_STEP) setTasksOpen(true);
+    setTourStep(step < TOUR_STEPS.length ? step : null);
+  }
+  const endTour = useCallback(() => setTourStep(null), []);
+  const listening = tourStep === LISTENING_STEP;
 
   function updateFeedback(messageId: number, change: Partial<FeedbackState>) {
     setFeedback((all) => {
@@ -186,28 +211,31 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
 
   return (
     // `layout`/`open` and `backdrop` are test hooks: keep them.
-    <div className={cn("layout flex h-dvh flex-col bg-page text-ink", historyOpen && "open")}>
+    <div className={cn("layout flex h-dvh flex-col bg-page text-ink", panelOpen && "open")}>
       <AlfredHeader user={user} onSignOut={onSignOut} />
       <div className="relative flex min-h-0 flex-1">
-        <SideRail
-          historyOpen={historyOpen}
-          onToggleHistory={() => setHistoryOpen((o) => !o)}
-          tasksOpen={tasksOpen}
-          onOpenTasks={() => setTasksOpen(true)}
-          tasksButtonRef={tasksButton}
-          onNewChat={newChat}
-          initial={user.displayName[0]}
-        />
-        {historyOpen && (
+        {showRail && (
+          <SideRail
+            historyOpen={historyOpen}
+            onToggleHistory={() => setHistoryOpen((o) => !o)}
+            tasksOpen={tasksOpen}
+            onOpenTasks={() => setTasksOpen(true)}
+            onShowChat={() => setTasksOpen(false)}
+            tasksButtonRef={tasksButton}
+            onNewChat={newChat}
+            initial={user.displayName[0]}
+          />
+        )}
+        {panelOpen && (
           <>
             <div
               aria-hidden="true"
-              className="backdrop fixed inset-0 top-14.5 left-12.5 z-20 bg-navy/30 md:hidden"
+              className="backdrop fixed inset-0 top-14.5 left-21 z-20 bg-navy/30 md:hidden"
               onClick={() => setHistoryOpen(false)}
             />
             <aside
               id="chat-history"
-              className="fixed top-14.5 bottom-0 left-12.5 z-30 w-72 overflow-y-auto border-r border-line bg-white shadow-float md:static md:z-0 md:shadow-none"
+              className="fixed top-14.5 bottom-0 left-21 z-30 w-72 overflow-y-auto border-r border-line bg-white shadow-float md:static md:z-0 md:shadow-none"
             >
               <HistoryPanel
                 sessions={sessions}
@@ -225,7 +253,11 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
           {/* Soft blue glow at the top of the chat (Figma "Aura glow") and a fade under the header. */}
           <div
             aria-hidden
-            className="pointer-events-none absolute -top-114 left-1/2 h-185.75 w-321.5 -translate-x-1/2 bg-aura opacity-20"
+            className={cn(
+              "pointer-events-none absolute -top-114 left-1/2 h-185.75 w-321.5 -translate-x-1/2 bg-aura",
+              // Full strength on the landing page (spec 016); softer behind a conversation so replies stay readable.
+              showWelcome ? "opacity-90" : "opacity-20",
+            )}
           />
           <div
             aria-hidden
@@ -237,9 +269,9 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
             <div
               role="log"
               aria-label="Conversation with Alfred"
-              className={cn("mx-auto flex w-full flex-col gap-6", showWelcome ? "my-auto max-w-250" : "max-w-190")}
+              className={cn("mx-auto flex w-full flex-col gap-6", showWelcome ? "my-auto max-w-265" : "max-w-190")}
             >
-              {historyError && !historyOpen && (
+              {historyError && !panelOpen && (
                 <div
                   role="alert"
                   className="flex items-center justify-between gap-2 rounded-md bg-warning-100 px-4 py-2 text-sm text-warning-700"
@@ -250,7 +282,14 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
                   </button>
                 </div>
               )}
-              {showWelcome && <Welcome name={user.displayName} onAsk={(q) => void sendText(q)} />}
+              {showWelcome && (
+                <Welcome
+                  name={user.displayName}
+                  onAsk={(q) => void sendText(q)}
+                  onStartTour={startTour}
+                  listening={listening}
+                />
+              )}
               {messages.map((m, i) =>
                 m.role === "user" ? (
                   <UserMessage key={`${activeSessionId}-${i}`} text={m.text} time={m.time} />
@@ -258,6 +297,7 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
                   <AssistantMessage
                     key={`${activeSessionId}-${i}`}
                     text={m.text}
+                    time={m.time}
                     failed={m.failed}
                     footer={
                       m.id !== undefined && (
@@ -279,11 +319,20 @@ export function ChatApp({ user, onSignOut }: { user: User; onSignOut: () => void
             </div>
           </div>
           <div className="relative mx-auto w-full max-w-200 px-6">
-            <Composer value={input} onChange={setInput} onSend={() => void sendText(input)} busy={waiting} />
+            {/* Keyed by chat, so a file attached in one chat doesn't follow you into another. */}
+            <Composer
+              key={activeSessionId}
+              value={input}
+              onChange={setInput}
+              onSend={() => void sendText(input)}
+              busy={waiting}
+              listening={listening}
+            />
           </div>
           {tasksOpen && <GuidedTasks />}
         </main>
       </div>
+      {tourStep !== null && <Tour step={tourStep} onNext={nextTourStep} onSkip={endTour} />}
     </div>
   );
 }

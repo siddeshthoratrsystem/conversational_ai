@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
-import { installServer, messageBox, openHistory, seed, signInAs, type Server } from "./helpers";
+import { installServer, messageBox, openHistory, seed, signInAs, startChat, type Server } from "./helpers";
 
 let server: Server;
 
@@ -57,7 +57,9 @@ const SECTIONS: [string, [string, string][]][] = [
 const tasksButton = () => screen.getByRole("button", { name: "Tasks" });
 const overlay = () => screen.queryByRole("region", { name: "Guided tasks" });
 
-function openTasks() {
+/** The rail (and its Tasks button) appears once a chat has started (spec 016), so start one if needed. */
+async function openTasks() {
+  if (!screen.queryByRole("button", { name: "Tasks" })) await startChat();
   fireEvent.click(tasksButton());
   return within(screen.getByRole("region", { name: "Guided tasks" }));
 }
@@ -74,16 +76,18 @@ afterEach(() => {
 });
 
 describe("Guided tasks overlay: browse (US1)", () => {
-  it("enables the Tasks rail button, closed to start", () => {
+  it("enables the Tasks rail button once a chat has started, closed to start", async () => {
     render(<App />);
+    expect(screen.queryByRole("button", { name: "Tasks" })).toBeNull(); // no rail on the homepage
+    await startChat();
     expect((tasksButton() as HTMLButtonElement).disabled).toBe(false);
     expect(tasksButton().getAttribute("aria-expanded")).toBe("false");
     expect(overlay()).toBeNull();
   });
 
-  it("shows the heading, intro and every section and task with the design's copy", () => {
+  it("shows the heading, intro and every section and task with the design's copy", async () => {
     render(<App />);
-    const region = openTasks();
+    const region = await openTasks();
 
     expect(region.getByRole("heading", { level: 2 }).textContent).toBe("Guided tasks");
     region.getByText("Guided tasks I can take you through, start to finish. Pick one and I’ll do the heavy lifting.");
@@ -103,9 +107,9 @@ describe("Guided tasks overlay: browse (US1)", () => {
     });
   });
 
-  it("keeps the header and rail, and marks Tasks as open", () => {
+  it("keeps the header and rail, and marks Tasks as open", async () => {
     render(<App />);
-    openTasks();
+    await openTasks();
     expect(screen.getByRole("banner")).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Alfred" })).toBeTruthy();
     expect(tasksButton().getAttribute("aria-expanded")).toBe("true");
@@ -114,34 +118,35 @@ describe("Guided tasks overlay: browse (US1)", () => {
 });
 
 describe("Guided tasks overlay: leave (US2)", () => {
-  it("stays open when Tasks is selected again", () => {
+  it("stays open when Tasks is selected again", async () => {
     render(<App />);
-    openTasks();
+    await openTasks();
     fireEvent.click(tasksButton());
     expect(overlay()).not.toBeNull();
     expect(tasksButton().getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("closes on Escape and returns focus to the Tasks button", () => {
+  it("closes on Escape and returns focus to the Tasks button", async () => {
     render(<App />);
-    openTasks();
+    await openTasks();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(overlay()).toBeNull();
     expect(document.activeElement).toBe(tasksButton());
   });
 
-  it("closes on New chat", () => {
+  it("closes on New chat", async () => {
     render(<App />);
-    openTasks();
+    await openTasks();
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(overlay()).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Alfred" })).toBeNull(); // back on the homepage
   });
 
   it("closes once a chat picked from History has loaded", async () => {
     seed(server, "s", [["earlier question", "earlier answer"]]);
     localStorage.setItem("convai.sessionIds", JSON.stringify(["s"]));
     render(<App />);
-    openTasks();
+    await openTasks();
     fireEvent.click(await openHistory().findByRole("button", { name: /earlier question/ }));
     await waitFor(() => expect(overlay()).toBeNull());
     screen.getByText("earlier answer");
@@ -154,7 +159,7 @@ describe("Guided tasks overlay: leave (US2)", () => {
     await screen.findByText("(mock) You said: first");
     fireEvent.change(messageBox(), { target: { value: "half typed" } });
 
-    openTasks();
+    await openTasks();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(overlay()).toBeNull();
 
@@ -164,16 +169,16 @@ describe("Guided tasks overlay: leave (US2)", () => {
 });
 
 describe("Guided tasks overlay: inert parts (US3)", () => {
-  it("has no buttons or links inside the overlay", () => {
+  it("has no buttons or links inside the overlay", async () => {
     render(<App />);
-    const region = openTasks();
+    const region = await openTasks();
     expect(region.queryAllByRole("button")).toEqual([]);
     expect(region.queryAllByRole("link")).toEqual([]);
   });
 
-  it("does nothing when a task row or its ⋯ marker is clicked", () => {
+  it("does nothing when a task row or its ⋯ marker is clicked", async () => {
     render(<App />);
-    const region = openTasks();
+    const region = await openTasks();
     const before = server.calls.length;
     const row = region.getAllByRole("listitem")[0];
     fireEvent.click(row);

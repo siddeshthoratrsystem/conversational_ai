@@ -108,7 +108,7 @@ export function GuidedTasks() {
     >
       <div className="mx-auto w-full max-w-189.5">
         <div className="flex flex-col gap-1.5 px-10 pt-9 pb-4">
-          <h2 id="guided-tasks-title" className="text-display-sm font-light tracking-[-0.5px] text-navy">
+          <h2 id="guided-tasks-title" data-tour="tasks-title" className="text-display-sm font-light tracking-[-0.5px] text-navy">
             Guided tasks
           </h2>
           <p className="text-base text-muted">

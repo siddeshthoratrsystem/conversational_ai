@@ -1,5 +1,5 @@
-import { CircleAlert, Copy, Info, Sparkles } from "lucide-react";
-import type { ReactNode } from "react";
+import { Check, CircleAlert, Copy, Info, Sparkles } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { parseServerTime, splitDisclaimer } from "@convai/core";
 import { Button } from "@convai/ui/button";
@@ -11,6 +11,58 @@ const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 // `message`, `disclaimer` and `pending` are test hooks: keep them.
 
+/**
+ * Put `text` on the clipboard. Uses the Clipboard API, and falls back to a hidden text area where that API is
+ * missing (pages not served over HTTPS or localhost, e.g. opened by the machine's network address).
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // denied: try the fallback
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.focus();
+  area.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+  }
+}
+
+/** Copy action for a message: shows a tick and "Copied" for 2 seconds after copying. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={copied ? "Copied" : "Copy message"}
+      title={copied ? "Copied" : "Copy message"}
+      onClick={async () => setCopied(await copyText(text))}
+    >
+      {copied ? <Check aria-hidden className="text-success-700" /> : <Copy aria-hidden />}
+    </Button>
+  );
+}
+
 /** Member's message (Figma "Evo / User message"): right-aligned white bubble with its time and a copy action. */
 export function UserMessage({ text, time }: { text: string; time?: string }) {
   return (
@@ -20,14 +72,7 @@ export function UserMessage({ text, time }: { text: string; time?: string }) {
       </p>
       <div className="flex items-center gap-1 text-sm text-muted">
         {time && <time dateTime={time}>{timeFormat.format(parseServerTime(time))}</time>}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Copy message"
-          onClick={() => void navigator.clipboard?.writeText(text)}
-        >
-          <Copy aria-hidden />
-        </Button>
+        <CopyButton text={text} />
       </div>
     </div>
   );
@@ -35,9 +80,19 @@ export function UserMessage({ text, time }: { text: string; time?: string }) {
 
 /**
  * Alfred's reply: Markdown on the page (no bubble, as in Figma), a trailing _italic_ disclaimer as a muted
- * note under it, and `footer` (the feedback controls) below that.
+ * note under it, its time (as on the member's messages), and `footer` (the feedback controls) below that.
  */
-export function AssistantMessage({ text, failed, footer }: { text: string; failed?: boolean; footer?: ReactNode }) {
+export function AssistantMessage({
+  text,
+  time,
+  failed,
+  footer,
+}: {
+  text: string;
+  time?: string;
+  failed?: boolean;
+  footer?: ReactNode;
+}) {
   const { body, disclaimer } = splitDisclaimer(text);
   return (
     <div className="flex flex-col gap-2.5">
@@ -63,6 +118,11 @@ export function AssistantMessage({ text, failed, footer }: { text: string; faile
           <Info aria-hidden className="mt-1 size-3.5 shrink-0" />
           <span className="disclaimer">{disclaimer}</span>
         </p>
+      )}
+      {time && (
+        <time dateTime={time} className="text-sm text-muted">
+          {timeFormat.format(parseServerTime(time))}
+        </time>
       )}
       {footer}
     </div>

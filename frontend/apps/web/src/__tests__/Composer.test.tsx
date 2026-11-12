@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
-import { installServer, messageBox, openHistory, signInAs, type Server } from "./helpers";
+import { installServer, messageBox, signInAs, type Server } from "./helpers";
 
 let server: Server;
 
@@ -25,8 +25,7 @@ const chatPosts = () => server.calls.filter((c) => c.method === "POST" && c.url 
 
 async function renderApp() {
   render(<App />);
-  openHistory();
-  await screen.findByText(/no past chats yet/i);
+  await act(async () => {}); // let the first chat-list load settle
 }
 
 describe("spec 003 US1: message box", () => {
@@ -41,6 +40,27 @@ describe("spec 003 US1: message box", () => {
     fireEvent.keyDown(box(), { key: "Enter" });
     await waitFor(() => expect(shownMessages()).toEqual(["hello", "(mock) You said: hello"]));
     expect(chatPosts()).toHaveLength(1);
+  });
+
+  it("sends when the Enter arrow button is clicked, like pressing Enter", async () => {
+    await renderApp();
+    fireEvent.change(box(), { target: { value: "via arrow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(shownMessages()).toEqual(["via arrow", "(mock) You said: via arrow"]));
+    expect(chatPosts()).toHaveLength(1);
+    expect(box().value).toBe("");
+  });
+
+  it("disables the Enter arrow button while a reply is pending, and sends nothing for empty input", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(chatPosts()).toHaveLength(0);
+
+    server.holdChat = new Promise<void>(() => {});
+    fireEvent.change(box(), { target: { value: "slow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(document.querySelector(".pending")).not.toBeNull());
+    expect((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not send on Shift+Enter", async () => {

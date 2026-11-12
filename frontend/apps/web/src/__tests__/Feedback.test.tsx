@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
-import { history, installServer, messageBox, openHistory, seed, signInAs, type Server } from "./helpers";
+import { history, installServer, messageBox, openHistory, seed, signInAs, startChat, type Server } from "./helpers";
 
 const KEY = "convai.sessionIds";
 let server: Server;
@@ -25,8 +25,7 @@ const pressed = (name: string) => screen.getByRole("button", { name }).getAttrib
 
 async function renderApp() {
   render(<App />);
-  openHistory();
-  await screen.findByText(/no past chats yet/i);
+  await act(async () => {}); // let the first chat-list load settle
 }
 
 /** Send a message and wait for its reply; returns the reply's message id. */
@@ -85,8 +84,8 @@ describe("spec 004 US1: rate an answer", () => {
     seed(server, "a", [["first topic", "(mock) You said: first topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["a"]));
     render(<App />);
-    openHistory();
-    fireEvent.click(await history().findByRole("button", { name: /first topic/ }));
+    await startChat();
+    fireEvent.click(await openHistory().findByRole("button", { name: /first topic/ }));
     await screen.findByText("(mock) You said: first topic");
     const replyId = server.sessions.get("a")!.messages[1].id;
     expect(pressed("Helpful")).toBe("false");
@@ -129,10 +128,10 @@ describe("spec 004 US1: rate an answer", () => {
     seed(server, "b", [["other topic", "(mock) You said: other topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["b"]));
     render(<App />);
-    await openHistory().findByText("other topic");
     await chat("hello");
     fireEvent.click(screen.getByRole("button", { name: "Helpful" }));
     await waitFor(() => expect(pressed("Helpful")).toBe("true"));
+    await openHistory().findByText("other topic");
 
     fireEvent.click(history().getByRole("button", { name: /other topic/ }));
     await screen.findByText("(mock) You said: other topic");

@@ -14,6 +14,16 @@ export const TOKEN_URL = "http://localhost:8090/default/token";
 /** Alfred's message box. */
 export const messageBox = () => screen.getByRole("textbox", { name: "Message Alfred" }) as HTMLTextAreaElement;
 
+/**
+ * Send a message and wait for its reply. The homepage has no rail (spec 016), so tests that use History or
+ * Tasks start a chat first. Adds a conversation titled `text`.
+ */
+export async function startChat(text = "hello") {
+  fireEvent.change(messageBox(), { target: { value: text } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByText(`(mock) You said: ${text}`);
+}
+
 /** Open the History panel from the rail (it starts closed) and return queries scoped to it. */
 export function openHistory() {
   if (!screen.queryByRole("navigation", { name: "Past chats" })) {
