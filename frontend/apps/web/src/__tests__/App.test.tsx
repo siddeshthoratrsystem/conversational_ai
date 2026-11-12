@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
-import { history, installServer, messageBox, openHistory, seed, signInAs, type Server } from "./helpers";
+import { history, installServer, messageBox, openHistory, seed, signInAs, startChat, type Server } from "./helpers";
 
 const KEY = "convai.sessionIds";
 let server: Server;
@@ -14,6 +14,8 @@ function storedIds(): string[] {
 function shownMessages(): string[] {
   return Array.from(document.querySelectorAll(".message")).map((el) => el.textContent ?? "");
 }
+
+const chatPosts = () => server.calls.filter((c) => c.method === "POST" && c.url === "/api/chat");
 
 function sidebarTitles(): string[] {
   return Array.from(document.querySelectorAll(".session-title")).map((el) => el.textContent ?? "");
@@ -47,15 +49,18 @@ describe("US1: see and reopen a past conversation", () => {
     localStorage.setItem(KEY, JSON.stringify(["a", "b"]));
 
     render(<App />);
+    expect(shownMessages()).toEqual([]); // page load opens a fresh chat, on the homepage (no rail)
+    await startChat();
     openHistory();
 
-    await waitFor(() => expect(sidebarTitles()).toEqual(["second topic", "first topic"]));
-    expect(shownMessages()).toEqual([]); // page load opens a fresh chat
+    await waitFor(() => expect(sidebarTitles()).toEqual(["hello", "second topic", "first topic"]));
   });
 
-  it("shows the empty state when this browser has no conversations", async () => {
+  it("shows the empty state when this browser has no conversations yet", async () => {
+    server.holdChat = new Promise<void>(() => {}); // the first reply never arrives, so nothing is stored
     render(<App />);
-    openHistory();
+    await send("first ever");
+    openHistory(); // the rail shows as soon as a chat starts
     expect(await screen.findByText(/no past chats yet/i)).toBeTruthy();
     expect(server.calls.filter((c) => c.url.startsWith("/api/sessions"))).toEqual([]);
   });
@@ -67,6 +72,7 @@ describe("US1: see and reopen a past conversation", () => {
     ]);
     localStorage.setItem(KEY, JSON.stringify(["a"]));
     render(<App />);
+    await startChat();
     openHistory();
     await screen.findByText("first topic");
 
@@ -88,10 +94,10 @@ describe("US1: see and reopen a past conversation", () => {
     seed(server, "a", [["first topic", "(mock) You said: first topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["a"]));
     render(<App />);
-    openHistory();
-    await screen.findByText("first topic");
     await send("current chat");
     await waitFor(() => expect(shownMessages()).toContain("(mock) You said: current chat"));
+    openHistory();
+    await screen.findByText("first topic");
 
     server.failHistory = true;
     await openChat("first topic");
@@ -113,21 +119,21 @@ describe("US1: see and reopen a past conversation", () => {
     localStorage.setItem(KEY, JSON.stringify(["a"]));
     server.failList = true;
     render(<App />);
+    await startChat();
     openHistory();
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/couldn't load/i);
     server.failList = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(sidebarTitles()).toEqual(["first topic"]));
+    await waitFor(() => expect(sidebarTitles()).toEqual(["hello", "first topic"]));
   });
 
   it("stores a new conversation and lists it after its first message", async () => {
     render(<App />);
-    openHistory();
-    await screen.findByText(/no past chats yet/i);
-
     await send("brand new");
+    await screen.findByText("(mock) You said: brand new");
+    openHistory();
 
     await waitFor(() => expect(sidebarTitles()).toEqual(["brand new"]));
     expect(storedIds()).toHaveLength(1);
@@ -143,8 +149,9 @@ describe("US2: continue a reopened conversation", () => {
     seed(server, "b", [["second topic", "(mock) You said: second topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["b", "a"]));
     render(<App />);
+    await startChat();
     openHistory();
-    await waitFor(() => expect(sidebarTitles()).toEqual(["second topic", "first topic"]));
+    await waitFor(() => expect(sidebarTitles()).toEqual(["hello", "second topic", "first topic"]));
 
     await openChat("first topic");
     await waitFor(() => expect(shownMessages()).toHaveLength(2));
@@ -158,10 +165,10 @@ describe("US2: continue a reopened conversation", () => {
         "(mock) You said: follow-up",
       ]),
     );
-    const posted = server.calls.find((c) => c.method === "POST")!;
-    expect((posted.body as { session_id: string }).session_id).toBe("a");
-    expect(storedIds()).toEqual(["a", "b"]);
-    await waitFor(() => expect(sidebarTitles()).toEqual(["first topic", "second topic"]));
+    expect((chatPosts().at(-1)!.body as { session_id: string }).session_id).toBe("a");
+    expect(storedIds()[0]).toBe("a");
+    expect(storedIds()).toHaveLength(3);
+    await waitFor(() => expect(sidebarTitles()).toEqual(["first topic", "hello", "second topic"]));
   });
 
   it("never shows a late reply in a different conversation", async () => {
@@ -169,6 +176,7 @@ describe("US2: continue a reopened conversation", () => {
     seed(server, "b", [["second topic", "(mock) You said: second topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["b", "a"]));
     render(<App />);
+    await startChat();
     openHistory();
     await screen.findByText("first topic");
     await openChat("first topic");
@@ -208,6 +216,7 @@ describe("US2: continue a reopened conversation", () => {
     seed(server, "b", [["second topic", "(mock) You said: second topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["b", "a"]));
     render(<App />);
+    await startChat();
     openHistory();
     await screen.findByText("first topic");
     await openChat("first topic");
@@ -242,26 +251,26 @@ describe("US3: start a new conversation", () => {
     seed(server, "a", [["first topic", "(mock) You said: first topic"]]);
     localStorage.setItem(KEY, JSON.stringify(["a"]));
     render(<App />);
+    await startChat();
     openHistory();
     await screen.findByText("first topic");
     await openChat("first topic");
     await waitFor(() => expect(shownMessages()).toHaveLength(2));
+    const before = storedIds();
 
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
 
     expect(shownMessages()).toEqual([]);
-    expect(storedIds()).toEqual(["a"]);
-    expect(sidebarTitles()).toEqual(["first topic"]);
-    const active = history().getByRole("button", { name: /first topic/ });
-    expect(active.getAttribute("aria-current")).toBeNull();
+    expect(storedIds()).toEqual(before);
+    expect(screen.queryByRole("navigation", { name: "Alfred" })).toBeNull(); // back on the homepage
 
     await send("new topic");
 
-    await waitFor(() => expect(sidebarTitles()).toEqual(["new topic", "first topic"]));
+    await waitFor(() => expect(sidebarTitles()).toEqual(["new topic", "hello", "first topic"]));
+    expect(history().getByRole("button", { name: /first topic/ }).getAttribute("aria-current")).toBeNull();
     const ids = storedIds();
-    expect(ids).toHaveLength(2);
-    expect(ids[1]).toBe("a");
-    expect(ids[0]).not.toBe("a");
+    expect(ids).toHaveLength(3);
+    expect(before).not.toContain(ids[0]);
 
     await openChat("first topic");
     await waitFor(() =>
@@ -273,13 +282,14 @@ describe("US3: start a new conversation", () => {
 describe("History panel", () => {
   it("starts closed and opens and closes from the rail's History button", async () => {
     render(<App />);
+    await startChat();
     const toggle = screen.getByRole("button", { name: "History" });
     const layout = document.querySelector(".layout")!;
     expect(screen.queryByRole("navigation", { name: "Past chats" })).toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(toggle);
-    expect(await screen.findByText(/no past chats yet/i)).toBeTruthy();
+    expect(await history().findByRole("button", { name: /hello/ })).toBeTruthy();
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(layout.classList.contains("open")).toBe(true);
 
@@ -290,8 +300,8 @@ describe("History panel", () => {
 
   it("closes when tapping outside it on a narrow screen", async () => {
     render(<App />);
-    openHistory();
-    await screen.findByText(/no past chats yet/i);
+    await startChat();
+    await openHistory().findByRole("button", { name: /hello/ });
     const layout = document.querySelector(".layout")!;
     expect(layout.classList.contains("open")).toBe(true);
 
@@ -310,6 +320,7 @@ describe("History panel", () => {
     server.failList = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(openHistory().getByRole("button", { name: /first topic/ })).toBeTruthy();
+    await startChat();
+    expect(await openHistory().findByRole("button", { name: /first topic/ })).toBeTruthy();
   });
 });

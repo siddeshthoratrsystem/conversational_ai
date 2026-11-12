@@ -26,6 +26,7 @@
   --color-link: #0061a0;
   --color-accent: #0076cf;
   --color-accent-bright: #0091da;
+  --color-flock: #1e80d8;
   --color-info-50: #f0fbfe;
   --color-info-75: #f2f9fd;
   --color-info-100: #e3f5fd;
@@ -79,6 +80,8 @@
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.12);
   --shadow-sm: 0 2px 4px 0.5px rgb(0 0 0 / 0.12);
   --shadow-dropdown: 0 0 8px 1.5px rgb(0 0 0 / 0.1);
+  --shadow-glow: 0 4px 16px rgb(0 118 207 / 0.2), 0 0 48px 2px rgb(0 145 218 / 0.32);
+  --shadow-spotlight: 0 0 14px 2px rgb(51 153 230 / 0.45), 0 0 0 200vmax rgb(0 40 85 / 0.22);
   --container-page: 1318px;
 }
 
