@@ -287,3 +287,18 @@ describe("spec 004 US3: change a rating", () => {
     expect(pressed("Helpful")).toBe("true");
   });
 });
+
+describe("comment limit boundary", () => {
+  it("counts down to exactly 0 at the limit and still submits (TC-I09 tail)", async () => {
+    await renderApp();
+    await chat("boundary");
+    fireEvent.click(screen.getByRole("button", { name: "Not helpful" }));
+    const box = await screen.findByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "x".repeat(1000) } });
+    expect(box.value).toHaveLength(1000);
+    await waitFor(() => expect(screen.getByText("0 characters left")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+    await screen.findByText("Thanks for your feedback");
+    expect(lastFeedback()!.body).toEqual({ rating: "down", comment: "x".repeat(1000) });
+  });
+});

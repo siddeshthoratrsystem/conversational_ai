@@ -1,7 +1,10 @@
 {
   "name": "convai-frontend",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "overrides": {
     "react": "19.3.0",
     "react-dom": "19.3.0"
@@ -12,6 +15,10 @@
     "test": "npm test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "tokens": "npm run generate -w @convai/tokens",
-    "bundle:mobile": "npm run bundle -w @convai/mobile"
+    "bundle:mobile": "npm run bundle -w @convai/mobile",
+    "e2e": "npm run e2e -w @convai/web"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0"
   }
 }
